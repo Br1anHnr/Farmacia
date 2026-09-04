@@ -113,6 +113,39 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
         }
       } else if (convId && isIncoming) {
         // Mensagem recebida do cliente no WhatsApp
+        // 0. Auto-cadastro silencioso de cliente no Supabase CRM
+        const senderObj = (event as any).sender || (event as any).conversation?.meta?.sender;
+        const senderPhone = senderObj?.phone_number || '';
+        const senderName = senderObj?.name || 'Cliente WhatsApp';
+        const cleanPhone = senderPhone.replace(/\D/g, '');
+
+        if (cleanPhone && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
+          fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customers?phone=eq.${cleanPhone}&organization_id=eq.11111111-1111-1111-1111-111111111111&select=id`, {
+            headers: {
+              'apikey': CONFIG.SUPABASE_SECRET_KEY,
+              'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
+            },
+          }).then(r => r.json()).then(async (existing: any) => {
+            if (!Array.isArray(existing) || existing.length === 0) {
+              await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customers`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'apikey': CONFIG.SUPABASE_SECRET_KEY,
+                  'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
+                  'Prefer': 'return=minimal',
+                },
+                body: JSON.stringify({
+                  organization_id: '11111111-1111-1111-1111-111111111111',
+                  name: senderName,
+                  phone: cleanPhone,
+                }),
+              });
+              console.log(`[Supabase CRM] Cliente salvo automaticamente no banco: ${senderName} (${cleanPhone})`);
+            }
+          }).catch((err) => console.warn('[Supabase CRM] Erro ao sincronizar cliente:', err));
+        }
+
         // 1. Extração silenciosa de dados comerciais para a Dashboard App
         if (event.content) {
           silentExtractionService.extractFromText(
@@ -237,6 +270,119 @@ app.get('/api/conversations/:id/suggestions', async (req: Request, res: Response
   }
 
   res.status(200).json({ suggestions });
+});
+
+// 5. Endpoints para Assumir Atendimento e Obter Status da Conversa
+app.get('/api/conversations/:id/claim', async (req: Request, res: Response) => {
+  const convId = parseInt(req.params.id || '0', 10);
+  if (!convId) {
+    return res.status(400).json({ error: 'INVALID_CONVERSATION_ID' });
+  }
+
+  try {
+    let labels: string[] = [];
+    if (CONFIG.CHATWOOT_API_TOKEN) {
+      const chatwootRes = await fetch(
+        `${CONFIG.CHATWOOT_BASE_URL}/api/v1/accounts/${CONFIG.CHATWOOT_ACCOUNT_ID}/conversations/${convId}/labels`,
+        { headers: { api_access_token: CONFIG.CHATWOOT_API_TOKEN } }
+      );
+      if (chatwootRes.ok) {
+        const data = (await chatwootRes.json()) as { payload?: string[] };
+        labels = data?.payload || [];
+      }
+    }
+
+    const claimedLabel = labels.find((l) => l.startsWith('atendido-por:'));
+    const branchLabel = labels.find((l) => l.startsWith('unidade:'));
+
+    if (claimedLabel) {
+      const agentRaw = claimedLabel.replace('atendido-por:', '').replace(/-/g, ' ');
+      const branchRaw = branchLabel ? branchLabel.replace('unidade:', '').replace(/-/g, ' ') : 'Matriz Centro';
+
+      return res.status(200).json({
+        is_claimed: true,
+        claimed_by: agentRaw.charAt(0).toUpperCase() + agentRaw.slice(1),
+        branch: branchRaw.charAt(0).toUpperCase() + branchRaw.slice(1),
+        labels,
+      });
+    }
+
+    return res.status(200).json({
+      is_claimed: false,
+      labels,
+    });
+  } catch (err: any) {
+    return res.status(200).json({ is_claimed: false, error: err.message });
+  }
+});
+
+app.post('/api/conversations/:id/claim', async (req: Request, res: Response) => {
+  const convId = parseInt(req.params.id || '0', 10);
+  if (!convId) {
+    return res.status(400).json({ error: 'INVALID_CONVERSATION_ID' });
+  }
+
+  try {
+    const { agent_name, branch_name } = req.body || {};
+    const agent = agent_name || 'Ana Souza';
+    const branch = branch_name || 'Unidade Guaratinguetá';
+
+    const cleanAgentSlug = agent.toLowerCase().replace(/[^a-z0-9]/g, '-');
+    const cleanBranchSlug = branch.toLowerCase().replace(/[^a-z0-9]/g, '-');
+
+    // Desativa o bot atomicamente para esta conversa
+    agentBotService.deactivateBotForConversation(convId, `AGENT_CLAIMED_BY_${cleanAgentSlug.toUpperCase()}`);
+
+    // Adiciona etiquetas no Chatwoot
+    await chatwootAdapter.addLabels(convId, [
+      'em-atendimento',
+      `atendido-por:${cleanAgentSlug}`,
+      `unidade:${cleanBranchSlug}`,
+    ]);
+
+    // Registra evento de auditoria no Supabase
+    if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
+      try {
+        await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/audit_events`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': CONFIG.SUPABASE_SECRET_KEY,
+            'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({
+            organization_id: '11111111-1111-1111-1111-111111111111',
+            actor_email: `${cleanAgentSlug}@multifarma.com`,
+            action: 'AGENT_CLAIMED_CONVERSATION',
+            entity_type: 'conversation',
+            entity_id: String(convId),
+            metadata: {
+              conversation_id: convId,
+              agent_name: agent,
+              branch_name: branch,
+              claimed_at: new Date().toISOString(),
+            },
+          }),
+        });
+      } catch (auditErr) {
+        console.warn('[Claim Audit] Erro ao gravar auditoria:', auditErr);
+      }
+    }
+
+    console.log(`[Claim Conversation] Atendimento da conv #${convId} assumido por ${agent} (${branch})`);
+
+    return res.status(200).json({
+      success: true,
+      is_claimed: true,
+      claimed_by: agent,
+      branch: branch,
+      claimed_at: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('[Claim Endpoint] Erro ao assumir conversa:', err);
+    return res.status(500).json({ error: 'FAILED_TO_CLAIM', message: err.message });
+  }
 });
 
 if (process.env.NODE_ENV !== 'test') {

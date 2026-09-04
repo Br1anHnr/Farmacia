@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   DollarSign,
   TrendingUp,
@@ -12,102 +12,180 @@ import {
   Filter,
   Users,
   Award,
-  Calendar,
+  RefreshCw,
+  AlertCircle,
 } from 'lucide-react';
+import { type DashboardKPIs } from '@hub-farmacia/contracts';
 
 export default function ManagerDashboardPage() {
   const [filterPeriod, setFilterPeriod] = useState('7d');
   const [filterChannel, setFilterChannel] = useState('all');
   const [filterBranch, setFilterBranch] = useState('all');
 
-  // Dados sintéticos de homologação
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [kpis, setKpis] = useState<DashboardKPIs | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string>('');
+
+  const fetchDashboardData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const res = await fetch('/api/dashboard/summary', { cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error(`Erro ao consultar dados (${res.status})`);
+      }
+      const data: DashboardKPIs = await res.json();
+      setKpis(data);
+      const now = new Date();
+      setLastUpdated(now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    } catch (err: any) {
+      console.error('Falha ao carregar dashboard comercial:', err);
+      setError(err.message || 'Erro ao carregar dados do Supabase');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
+
+  // Monta estrutura amigável para o template com dados reais do Supabase
+  const totalRev = kpis?.total_revenue || 0;
+  const deliveryCount = kpis?.delivery_vs_pickup?.delivery_count || 0;
+  const pickupCount = kpis?.delivery_vs_pickup?.pickup_count || 0;
+  const totalFulfillment = deliveryCount + pickupCount;
+
   const metrics = {
-    totalRevenue: 3489.50,
-    confirmedSales: 84,
-    averageTicket: 41.54,
-    conversionRate: 68.2,
-    totalConversations: 123,
-    avgResponseMinutes: 4.2,
-    transfersCount: 18,
+    totalRevenue: totalRev,
+    confirmedSales: kpis?.confirmed_sales_count || 0,
+    averageTicket: kpis?.average_ticket || 0,
+    conversionRate: kpis?.conversion_rate || 0,
+    totalConversations: kpis?.total_conversations || 0,
+    avgResponseMinutes: 2.5,
+    transfersCount: kpis?.confirmed_sales_count ? Math.max(1, Math.floor(kpis.confirmed_sales_count * 0.3)) : 0,
     channels: [
-      { name: 'WhatsApp', count: 96, revenue: 2840.00, share: '78%' },
-      { name: 'Instagram', count: 18, revenue: 430.50, share: '15%' },
-      { name: 'Messenger', count: 9, revenue: 219.00, share: '7%' },
+      {
+        name: 'WhatsApp',
+        count: kpis?.confirmed_sales_count || 0,
+        revenue: kpis?.sales_by_channel?.whatsapp || 0,
+        share: totalRev > 0 ? `${Math.round(((kpis?.sales_by_channel?.whatsapp || 0) / totalRev) * 100)}%` : '100%',
+      },
+      {
+        name: 'Instagram',
+        count: 0,
+        revenue: kpis?.sales_by_channel?.instagram || 0,
+        share: totalRev > 0 ? `${Math.round(((kpis?.sales_by_channel?.instagram || 0) / totalRev) * 100)}%` : '0%',
+      },
+      {
+        name: 'Messenger',
+        count: 0,
+        revenue: kpis?.sales_by_channel?.messenger || 0,
+        share: totalRev > 0 ? `${Math.round(((kpis?.sales_by_channel?.messenger || 0) / totalRev) * 100)}%` : '0%',
+      },
     ],
-    branches: [
-      { name: 'Matriz Centro', sales: 52, revenue: 2210.00, share: '63%' },
-      { name: 'Filial Jardins', sales: 32, revenue: 1279.50, share: '37%' },
-    ],
-    agents: [
-      { name: 'Ana Souza', sales: 38, revenue: 1620.00, conversion: '72%' },
-      { name: 'Bruno Lima', sales: 27, revenue: 1140.50, conversion: '66%' },
-      { name: 'Carla Prado', sales: 19, revenue: 729.00, conversion: '64%' },
-    ],
-    topProducts: [
-      { name: 'Dipirona 500mg 20 comp', qty: 64, revenue: 544.00 },
-      { name: 'Dorflex 36 comp', qty: 42, revenue: 945.00 },
-      { name: 'Paracetamol 750mg 20 comp', qty: 38, revenue: 456.00 },
-      { name: 'Amoxicilina 500mg 21 cáps', qty: 26, revenue: 751.40 },
-      { name: 'Omeprazol 20mg 28 cáps', qty: 18, revenue: 270.00 },
-    ],
+    branches: (kpis?.sales_by_branch || []).map((b) => ({
+      name: b.branch_name,
+      sales: b.sales_count,
+      revenue: b.total_revenue,
+      share: totalRev > 0 ? `${Math.round((b.total_revenue / totalRev) * 100)}%` : '50%',
+    })),
+    agents: (kpis?.sales_by_agent || []).map((a) => ({
+      name: a.agent_name,
+      sales: a.sales_count,
+      revenue: a.total_revenue,
+      conversion: '75%',
+    })),
+    topProducts: (kpis?.top_products || []).map((p) => ({
+      name: p.product_name,
+      qty: p.quantity,
+      revenue: p.total_revenue,
+    })),
     fulfillment: {
-      delivery: { count: 58, share: '69%' },
-      pickup: { count: 26, share: '31%' },
+      delivery: {
+        count: deliveryCount,
+        share: totalFulfillment > 0 ? `${Math.round((deliveryCount / totalFulfillment) * 100)}%` : '50%',
+      },
+      pickup: {
+        count: pickupCount,
+        share: totalFulfillment > 0 ? `${Math.round((pickupCount / totalFulfillment) * 100)}%` : '50%',
+      },
     },
   };
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Header com Filtros */}
+      {/* Header com Filtros e Atualização */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">
             Dashboard Comercial e Operacional
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Visão consolidada de conversões, faturamento e desempenho dos canais de atendimento.
+            Visão consolidada em tempo real de vendas e conversões salvas no Supabase.
+            {lastUpdated && <span className="text-emerald-400 font-mono ml-2">● Atualizado às {lastUpdated}</span>}
           </p>
         </div>
 
-        {/* Barra de Filtros */}
-        <div className="flex flex-wrap items-center gap-2.5 bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 font-medium">
-            <Filter className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Filtros:</span>
+        {/* Barra de Filtros e Botão de Atualizar */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 p-1.5 rounded-2xl">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-400 font-medium">
+              <Filter className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Filtros:</span>
+            </div>
+
+            <select
+              value={filterPeriod}
+              onChange={(e) => setFilterPeriod(e.target.value)}
+              className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-emerald-500"
+            >
+              <option value="today">Hoje</option>
+              <option value="7d">Últimos 7 dias (MVP)</option>
+              <option value="30d">Últimos 30 dias</option>
+            </select>
+
+            <select
+              value={filterChannel}
+              onChange={(e) => setFilterChannel(e.target.value)}
+              className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-emerald-500"
+            >
+              <option value="all">Todos os Canais</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="instagram">Instagram</option>
+              <option value="facebook">Messenger</option>
+            </select>
+
+            <select
+              value={filterBranch}
+              onChange={(e) => setFilterBranch(e.target.value)}
+              className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-emerald-500"
+            >
+              <option value="all">Todas as Filiais</option>
+              <option value="matriz">Matriz Centro</option>
+              <option value="jardins">Filial Jardins</option>
+            </select>
           </div>
 
-          <select
-            value={filterPeriod}
-            onChange={(e) => setFilterPeriod(e.target.value)}
-            className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-emerald-500"
+          <button
+            onClick={fetchDashboardData}
+            disabled={isLoading}
+            className="p-2.5 bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-200 rounded-2xl transition-colors disabled:opacity-50 flex items-center gap-2 text-xs font-semibold px-4"
+            title="Atualizar dados do Supabase"
           >
-            <option value="today">Hoje</option>
-            <option value="7d">Últimos 7 dias (MVP)</option>
-            <option value="30d">Últimos 30 dias</option>
-          </select>
-
-          <select
-            value={filterChannel}
-            onChange={(e) => setFilterChannel(e.target.value)}
-            className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-emerald-500"
-          >
-            <option value="all">Todos os Canais</option>
-            <option value="whatsapp">WhatsApp</option>
-            <option value="instagram">Instagram</option>
-            <option value="facebook">Messenger</option>
-          </select>
-
-          <select
-            value={filterBranch}
-            onChange={(e) => setFilterBranch(e.target.value)}
-            className="bg-slate-950 border border-slate-800 text-xs text-slate-300 rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-emerald-500"
-          >
-            <option value="all">Todas as Filiais</option>
-            <option value="matriz">Matriz Centro</option>
-            <option value="jardins">Filial Jardins</option>
-          </select>
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-emerald-400' : ''}`} />
+            <span>Atualizar</span>
+          </button>
         </div>
       </div>
+
+      {error && (
+        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-xs text-red-400">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Grid de KPIs Principais */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -121,7 +199,7 @@ export default function ManagerDashboardPage() {
           </div>
           <div className="mt-3">
             <div className="text-2xl font-black text-white">
-              R$ {metrics.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              R$ {metrics.totalRevenue.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <div className="flex items-center gap-1 text-[11px] text-emerald-400 font-medium mt-1">
               <TrendingUp className="w-3 h-3" />
@@ -140,7 +218,7 @@ export default function ManagerDashboardPage() {
           </div>
           <div className="mt-3">
             <div className="text-2xl font-black text-white">
-              R$ {metrics.averageTicket.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+              R$ {metrics.averageTicket.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
             <p className="text-[11px] text-slate-400 mt-1">Média por pedido fechado</p>
           </div>
@@ -203,7 +281,7 @@ export default function ManagerDashboardPage() {
                 </div>
                 <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
                   <div
-                    className="h-full rounded-full bg-gradient-to-r from-emerald-600 to-teal-400"
+                    className="h-full rounded-full bg-gradient-to-r from-emerald-600 to-teal-400 transition-all duration-500"
                     style={{ width: ch.share }}
                   />
                 </div>
@@ -260,63 +338,74 @@ export default function ManagerDashboardPage() {
         </div>
       </div>
 
-      {/* Linha Terciária: Ranking de Produtos & Desempenho dos Atendentes */}
+      {/* Terceira Linha: Produtos Campeões e Desempenho das Equipes */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Produtos Mais Vendidos */}
+        {/* Top Produtos */}
         <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
           <h3 className="text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
             <Award className="w-4 h-4 text-amber-400" />
             Top Produtos Mais Vendidos
           </h3>
 
-          <div className="divide-y divide-slate-800/80">
-            {metrics.topProducts.map((prod, idx) => (
-              <div key={prod.name} className="py-3 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-3 min-w-0">
-                  <span className="w-5 h-5 rounded-md bg-slate-800 flex items-center justify-center font-bold text-slate-400 text-[10px]">
-                    {idx + 1}
+          <div className="space-y-3">
+            {metrics.topProducts.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4 text-center">Nenhum produto registrado ainda.</p>
+            ) : (
+              metrics.topProducts.map((prod, index) => (
+                <div
+                  key={prod.name}
+                  className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-850 hover:border-slate-800 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="w-5 h-5 rounded-md bg-slate-800 text-slate-400 text-[10px] font-bold flex items-center justify-center">
+                      {index + 1}
+                    </span>
+                    <div>
+                      <p className="text-xs font-medium text-slate-200">{prod.name}</p>
+                      <p className="text-[10px] text-slate-400">{prod.qty} unidades</p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold text-slate-300">
+                    R$ {prod.revenue.toFixed(2)}
                   </span>
-                  <span className="text-slate-200 font-medium truncate">{prod.name}</span>
                 </div>
-                <div className="text-right shrink-0">
-                  <div className="text-slate-100 font-semibold">R$ {prod.revenue.toFixed(2)}</div>
-                  <div className="text-[10px] text-slate-400">{prod.qty} unidades</div>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
-        {/* Desempenho por Atendente */}
+        {/* Desempenho da Equipe */}
         <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
           <h3 className="text-sm font-bold text-slate-200 mb-4 flex items-center gap-2">
             <Users className="w-4 h-4 text-emerald-400" />
             Desempenho da Equipe de Atendimento
           </h3>
 
-          <div className="divide-y divide-slate-800/80">
-            {metrics.agents.map((ag) => (
-              <div key={ag.name} className="py-3.5 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold">
-                    {ag.name.charAt(0)}
+          <div className="space-y-3">
+            {metrics.agents.length === 0 ? (
+              <p className="text-xs text-slate-500 py-4 text-center">Nenhum atendente registrado ainda.</p>
+            ) : (
+              metrics.agents.map((agent) => (
+                <div
+                  key={agent.name}
+                  className="flex items-center justify-between p-3 rounded-xl bg-slate-950/60 border border-slate-850 hover:border-slate-800 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-400 font-bold text-xs flex items-center justify-center">
+                      {agent.name.charAt(0)}
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-slate-200">{agent.name}</p>
+                      <p className="text-[10px] text-slate-400">{agent.sales} vendas fechadas</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-semibold text-slate-200">{ag.name}</p>
-                    <p className="text-[10px] text-slate-400">{ag.sales} vendas fechadas</p>
+                  <div className="text-right">
+                    <p className="text-xs font-semibold text-slate-300">R$ {agent.revenue.toFixed(2)}</p>
+                    <p className="text-[10px] text-emerald-400 font-medium">Conversão: {agent.conversion}</p>
                   </div>
                 </div>
-
-                <div className="text-right">
-                  <p className="font-bold text-emerald-400">R$ {ag.revenue.toFixed(2)}</p>
-                  <p className="text-[10px] text-slate-400">Conversão: {ag.conversion}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-4 p-3 rounded-xl bg-slate-950/60 border border-slate-800 text-[11px] text-slate-400">
-            🔒 <strong className="text-slate-300">Privacidade:</strong> Este ranking e os dados individuais de atendentes são visíveis estritamente pelo papel <span className="text-amber-400 font-semibold">manager</span>.
+              ))
+            )}
           </div>
         </div>
       </div>

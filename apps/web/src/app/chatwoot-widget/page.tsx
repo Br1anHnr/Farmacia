@@ -21,6 +21,7 @@ import {
   LogOut,
   MessagesSquare,
   LayoutDashboard,
+  UserCheck,
 } from 'lucide-react';
 import { AUTH_COOKIE_NAME, type UserContext } from '@/lib/auth-store';
 
@@ -60,6 +61,20 @@ export default function ChatwootWidgetPage() {
   const [branchName, setBranchName] = useState<string>('Matriz Centro');
   const [appliedFeedback, setAppliedFeedback] = useState(false);
 
+  // Estado de atribuição de atendimento e filial
+  const [claimState, setClaimState] = useState<{
+    isClaimed: boolean;
+    claimedBy: string;
+    branch: string;
+  }>({
+    isClaimed: false,
+    claimedBy: '',
+    branch: '',
+  });
+  const [isClaiming, setIsClaiming] = useState(false);
+  const [activeAgentName, setActiveAgentName] = useState('Ana Souza');
+  const [activeBranchName, setActiveBranchName] = useState('Unidade Guaratinguetá');
+
   // Sugestões extraídas silenciosamente pela IA
   const [aiSuggestion, setAiSuggestion] = useState<{
     product: string;
@@ -68,14 +83,7 @@ export default function ChatwootWidgetPage() {
     fulfillment: 'delivery' | 'pickup';
     address?: string;
     confidence: number;
-  } | null>({
-    product: 'Dipirona 500mg 20 comp',
-    qty: 1,
-    price: 8.50,
-    fulfillment: 'pickup',
-    address: 'Retirada no Balcão',
-    confidence: 0.95,
-  });
+  } | null>(null);
 
   // Estado do formulário de venda (inicia limpo para feedback claro do usuário)
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -143,7 +151,7 @@ export default function ChatwootWidgetPage() {
     };
   }, []);
 
-  // Busca sugestões reais extraídas pelo backend
+  // Busca sugestões reais e status de atendimento da conversa
   useEffect(() => {
     if (!conversationId) return;
 
@@ -160,7 +168,7 @@ export default function ChatwootWidgetPage() {
               price: latest.suggested_unit_price || 8.50,
               fulfillment: latest.suggested_fulfillment || 'pickup',
               address: latest.suggested_address || 'Retirada no Balcão',
-              confidence: latest.confidence || 0.92,
+              confidence: latest.confidence || 0.95,
             });
             setFulfillmentMethod(latest.suggested_fulfillment || 'pickup');
             if (latest.suggested_address) setDeliveryAddress(latest.suggested_address);
@@ -171,8 +179,54 @@ export default function ChatwootWidgetPage() {
       }
     };
 
+    const fetchClaimStatus = async () => {
+      try {
+        const res = await fetch(`/api/conversations/${conversationId}/claim`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.is_claimed) {
+            setClaimState({
+              isClaimed: true,
+              claimedBy: data.claimed_by || 'Atendente',
+              branch: data.branch || 'Unidade Guaratinguetá',
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Erro ao consultar status de atendimento:', err);
+      }
+    };
+
     fetchSuggestions();
+    fetchClaimStatus();
   }, [conversationId]);
+
+  const handleClaimAttendance = async () => {
+    if (!conversationId) return;
+    setIsClaiming(true);
+    try {
+      const res = await fetch(`/api/conversations/${conversationId}/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          agent_name: activeAgentName,
+          branch_name: activeBranchName,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setClaimState({
+          isClaimed: true,
+          claimedBy: data.claimed_by || activeAgentName,
+          branch: data.branch || activeBranchName,
+        });
+      }
+    } catch (err) {
+      console.error('Erro ao assumir atendimento:', err);
+    } finally {
+      setIsClaiming(false);
+    }
+  };
 
   // Cálculos financeiros
   const subtotal = cart.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
@@ -215,13 +269,18 @@ export default function ChatwootWidgetPage() {
     setIsSubmitting(true);
 
     try {
+      const assignedBranchId = (claimState.isClaimed ? claimState.branch : activeBranchName).includes('Jardins')
+        ? '22222222-2222-2222-2222-222222222222'
+        : '22222222-2222-2222-2222-222222222221';
+
       const payload = {
         organization_id: '11111111-1111-1111-1111-111111111111',
-        branch_id: '22222222-2222-2222-2222-222222222221',
+        branch_id: assignedBranchId,
         chatwoot_conversation_id: conversationId || 2,
         channel,
         customer_name: customerName,
         customer_phone: customerPhone,
+        agent_name: claimState.isClaimed ? claimState.claimedBy : activeAgentName,
         items: cart.map((c) => ({
           product_name: c.name,
           unit_price: c.unitPrice,
@@ -327,6 +386,70 @@ export default function ChatwootWidgetPage() {
           {channel}
         </span>
       </div>
+
+      {/* Barra de Controle e Atribuição de Atendimento */}
+      {!claimState.isClaimed ? (
+        <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 mb-4 shadow-lg">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+              Fila de Atendimento (Não Atribuído)
+            </span>
+            <span className="text-[10px] text-slate-500">Clique para assumir</span>
+          </div>
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+            <select
+              value={activeAgentName}
+              onChange={(e) => setActiveAgentName(e.target.value)}
+              className="bg-slate-950 border border-slate-800 text-xs text-slate-200 rounded-lg px-2.5 py-1.5 flex-1 focus:outline-none focus:border-emerald-500"
+            >
+              <option value="Ana Souza">Ana Souza (Atendente)</option>
+              <option value="Bruno Lima">Bruno Lima (Atendente)</option>
+              <option value="Carlos Mendes">Carlos Mendes (Gerente)</option>
+            </select>
+
+            <select
+              value={activeBranchName}
+              onChange={(e) => setActiveBranchName(e.target.value)}
+              className="bg-slate-950 border border-slate-800 text-xs text-slate-200 rounded-lg px-2.5 py-1.5 flex-1 focus:outline-none focus:border-emerald-500"
+            >
+              <option value="Unidade Guaratinguetá">Unidade Guaratinguetá</option>
+              <option value="Matriz Centro">Matriz Centro</option>
+              <option value="Filial Jardins">Filial Jardins</option>
+            </select>
+
+            <button
+              onClick={handleClaimAttendance}
+              disabled={isClaiming}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-600/20 disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>{isClaiming ? 'Assumindo...' : 'Assumir Atendimento'}</span>
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="p-3 rounded-xl bg-emerald-950/40 border border-emerald-500/40 mb-4 flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold">
+              <UserCheck className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="font-bold text-emerald-300 text-xs">Atendimento em Andamento</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+              </div>
+              <p className="text-[11px] text-slate-300 font-medium">
+                Responsável: <strong className="text-white">{claimState.claimedBy}</strong> • {claimState.branch}
+              </p>
+            </div>
+          </div>
+          <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+            Assumido
+          </span>
+        </div>
+      )}
 
       {/* Cartão de Contexto do Cliente */}
       <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 mb-4 space-y-1.5">

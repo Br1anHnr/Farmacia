@@ -22,14 +22,50 @@ export async function POST(request: NextRequest) {
     );
     const totalAmount = Math.max(0, subtotal - input.discount);
 
+    // 0. Localizar ou cadastrar o cliente real no Supabase
+    let realCustomerId = '44444444-4444-4444-4444-444444444441';
+    const phoneClean = (input.customer_phone || '').replace(/\D/g, '');
+
+    try {
+      if (phoneClean) {
+        const existingCust = await supabaseRest<any[]>('customers', {
+          params: {
+            phone: `eq.${phoneClean}`,
+            organization_id: `eq.${input.organization_id}`,
+            select: 'id,name',
+          },
+        });
+
+        if (existingCust.data && existingCust.data.length > 0 && existingCust.data[0]?.id) {
+          realCustomerId = existingCust.data[0].id;
+          console.log('[Supabase Customers] Cliente existente reutilizado:', realCustomerId, existingCust.data[0].name);
+        } else {
+          const newCust = await supabaseRest<any[]>('customers', {
+            method: 'POST',
+            body: {
+              organization_id: input.organization_id,
+              name: input.customer_name || 'Cliente WhatsApp',
+              phone: phoneClean,
+            },
+          });
+          if (newCust.data && newCust.data[0]?.id) {
+            realCustomerId = newCust.data[0].id;
+            console.log('[Supabase Customers] Novo cliente gravado no Supabase:', realCustomerId, input.customer_name);
+          }
+        }
+      }
+    } catch (custErr) {
+      console.warn('[Supabase Customers] Erro ao cadastrar cliente, usando fallback:', custErr);
+    }
+
     // 1. Inserir cabeçalho da venda no Supabase
     const salePayload = {
       organization_id: input.organization_id,
       branch_id: input.branch_id,
       chatwoot_conversation_id: input.chatwoot_conversation_id,
       channel: input.channel,
-      customer_id: '44444444-4444-4444-4444-444444444441',
-      agent_id: '33333333-3333-3333-3333-333333333332', // Atendente Ana Clara
+      customer_id: realCustomerId,
+      agent_id: input.agent_id || '33333333-3333-3333-3333-333333333332',
       subtotal,
       discount: input.discount,
       total_amount: totalAmount,
@@ -69,8 +105,8 @@ export async function POST(request: NextRequest) {
         method: 'POST',
         body: {
           organization_id: input.organization_id,
-          actor_id: '33333333-3333-3333-3333-333333333332',
-          actor_email: 'ana.clara@multifarma.com',
+          actor_id: input.agent_id || '33333333-3333-3333-3333-333333333332',
+          actor_email: input.agent_name ? `${input.agent_name.toLowerCase().replace(/[^a-z0-9]/g, '.')}@multifarma.com` : 'ana.clara@multifarma.com',
           action: 'SALE_CONFIRMED',
           entity_type: 'sale',
           entity_id: realSaleId,
@@ -78,8 +114,11 @@ export async function POST(request: NextRequest) {
             conversation_id: input.chatwoot_conversation_id,
             total_amount: totalAmount,
             channel: input.channel,
+            customer_name: input.customer_name,
+            customer_phone: phoneClean,
             items_count: input.items.length,
             fulfillment_method: input.fulfillment_method,
+            agent_name: input.agent_name || 'Ana Souza',
           },
         },
       });

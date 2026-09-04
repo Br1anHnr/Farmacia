@@ -58,6 +58,8 @@ export const CreateSaleInputSchema = z.object({
   origin_type: SaleOriginTypeSchema.default('manual'),
   delivery_address: z.string().optional(),
   notes: z.string().optional(),
+  agent_id: z.string().optional(),
+  agent_name: z.string().optional(),
 });
 export type CreateSaleInput = z.infer<typeof CreateSaleInputSchema>;
 
