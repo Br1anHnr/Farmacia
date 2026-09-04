@@ -11,6 +11,11 @@ export class ChatwootAdapter {
   public sentMessages: Array<{ conversationId: number; content: string; isPrivate: boolean; timestamp: string }> = [];
   public conversationStatuses: Map<number, string> = new Map();
   public conversationAssignees: Map<number, number> = new Map();
+  public botMessageIds = new Set<number>();
+
+  public isBotMessage(id: number): boolean {
+    return this.botMessageIds.has(id);
+  }
 
   public async sendMessage(conversationId: number, content: string, isPrivate = false): Promise<{ id: number; success: boolean }> {
     this.sentMessages.push({
@@ -21,7 +26,9 @@ export class ChatwootAdapter {
     });
 
     if (CONFIG.MOCK_MODE) {
-      return { id: Math.floor(Math.random() * 10000), success: true };
+      const mockId = Math.floor(Math.random() * 10000);
+      this.botMessageIds.add(mockId);
+      return { id: mockId, success: true };
     }
 
     try {
@@ -43,6 +50,9 @@ export class ChatwootAdapter {
       }
 
       const data = await res.json() as { id: number };
+      if (data?.id) {
+        this.botMessageIds.add(data.id);
+      }
       return { id: data.id, success: true };
     } catch (err) {
       console.error(`[ChatwootAdapter] Erro ao enviar mensagem para conv #${conversationId}:`, err);

@@ -5,6 +5,7 @@ import { idempotencyService } from './services/idempotency.js';
 import { agentBotService } from './services/agentbot.js';
 import { silentExtractionService } from './services/extraction.js';
 import { evolutionAdapter } from './adapters/evolution.js';
+import { chatwootAdapter } from './adapters/chatwoot.js';
 import {
   AgentBotPayloadSchema,
   ChatwootWebhookEventSchema,
@@ -93,27 +94,42 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
     }
 
     const convId = event.conversation?.id;
+    const msgId = typeof event.id === 'number' ? event.id : (typeof event.id === 'string' ? parseInt(event.id, 10) : 0);
 
-    // Se um atendente humano mandou mensagem, garante desligamento atômico do bot
+    console.log(`[Chatwoot Webhook] Evento: ${event.event}, Conv: #${convId}, Msg: #${msgId}, Tipo: ${event.message_type}, Conteúdo: "${event.content || ''}"`);
+
+    // Processamento de mensagens
     if (event.event === 'message_created') {
-      if (convId && (event.message_type === 'outgoing' || event.private)) {
-        agentBotService.deactivateBotForConversation(convId, 'AGENT_SENT_MESSAGE_WEBHOOK');
-      } else if (convId && (event.message_type === 'incoming' || (event as { message_type?: number }).message_type === 0)) {
+      const isOutgoing = event.message_type === 'outgoing' || (event as { message_type?: unknown }).message_type === 1;
+      const isIncoming = event.message_type === 'incoming' || (event as { message_type?: unknown }).message_type === 0 || (!event.message_type && !event.private);
+
+      if (convId && (isOutgoing || event.private)) {
+        // Se a mensagem foi enviada pelo próprio bot do Hub, não deve desligá-lo
+        if (msgId && chatwootAdapter.isBotMessage(msgId)) {
+          console.log(`[Chatwoot Webhook] Mensagem #${msgId} enviada pelo próprio bot. Bot mantido.`);
+        } else {
+          // Atendente humano enviou mensagem: desligamento atômico
+          agentBotService.deactivateBotForConversation(convId, 'AGENT_SENT_MESSAGE_WEBHOOK');
+        }
+      } else if (convId && isIncoming) {
         // Mensagem recebida do cliente no WhatsApp
         // 1. Extração silenciosa de dados comerciais para a Dashboard App
         if (event.content) {
           silentExtractionService.extractFromText(
             '11111111-1111-1111-1111-111111111111',
             convId,
-            typeof event.id === 'number' ? event.id : 1,
+            msgId || 1,
             event.content
           );
         }
 
         // 2. Disparo do Bot de Triagem (se bot estiver ativo para essa conversa)
-        if (agentBotService.getConversationState(convId) === 'BOT_ACTIVE') {
+        const currentState = agentBotService.getConversationState(convId);
+        console.log(`[Chatwoot Webhook] Estado do bot na conversa #${convId}: ${currentState}`);
+
+        if (currentState === 'BOT_ACTIVE') {
           const fakeMsg = {
-            id: typeof event.id === 'number' ? event.id : Date.now(),
+            id: msgId || Date.now(),
             inbox_id: 1,
             conversation_id: convId,
             message_type: 'incoming' as const,
@@ -121,23 +137,24 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
             content_type: 'text',
             created_at: Math.floor(Date.now() / 1000),
             private: false,
-            attachments: event.attachments,
+            attachments: event.attachments as any,
           };
           const fakeConv = {
             id: convId,
             account_id: 1,
-            status: event.conversation?.status || 'pending',
+            status: 'pending' as const,
             inbox_id: 1,
           };
-          await agentBotService.handleIncomingMessage(fakeConv, fakeMsg);
+          const decision = await agentBotService.handleIncomingMessage(fakeConv, fakeMsg);
+          console.log(`[Chatwoot Webhook] Decisão da triagem #${convId}:`, decision);
         }
       }
     }
 
-    // Se o status da conversa mudou para open ou atendente foi atribuído
+    // Se um atendente humano foi atribuído à conversa
     if (event.event === 'conversation_updated' || event.event === 'conversation_status_changed') {
-      if (convId && event.conversation?.status === 'open') {
-        agentBotService.deactivateBotForConversation(convId, 'CONVERSATION_OPENED');
+      if (convId && event.conversation?.assignee_id) {
+        agentBotService.deactivateBotForConversation(convId, 'AGENT_ASSIGNED_TO_CONVERSATION');
       }
     }
 
