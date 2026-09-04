@@ -1,65 +1,54 @@
 'use client';
 
-import React, { useState } from 'react';
-import { ShieldCheck, Search, Filter, Clock, CheckCircle2, UserCheck, ArrowRightLeft } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ShieldCheck, Search, Clock, RefreshCw, AlertCircle } from 'lucide-react';
+
+interface AuditLog {
+  id: string;
+  timestamp: string;
+  action: string;
+  actor: string;
+  entity: string;
+  details: string;
+  badgeClass: string;
+}
 
 export default function AuditPage() {
   const [searchTerm, setSearchTerm] = useState('');
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  // Dados sintéticos de homologação
-  const auditLogs = [
-    {
-      id: 'aud_101',
-      timestamp: 'Hoje às 14:32:10',
-      action: 'SALE_CONFIRMED',
-      actor: 'Ana Souza (Atendente)',
-      entity: 'Venda #6661 (R$ 29,00)',
-      details: 'Venda confirmada via Dashboard App lateral no Chatwoot (Conv #101 - WhatsApp).',
-      badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    },
-    {
-      id: 'aud_102',
-      timestamp: 'Hoje às 14:28:45',
-      action: 'BOT_HANDOFF_TO_HUMAN',
-      actor: 'AgentBot (Sistema)',
-      entity: 'Conversa #101 (WhatsApp)',
-      details: 'Triagem concluída com intenção BUY_PRODUCT. Desligamento atômico do bot acionado.',
-      badgeClass: 'bg-sky-500/20 text-sky-400 border-sky-500/30',
-    },
-    {
-      id: 'aud_103',
-      timestamp: 'Hoje às 13:15:02',
-      action: 'CONVERSATION_TRANSFERRED',
-      actor: 'Bruno Lima (Atendente)',
-      entity: 'Conversa #98 (Instagram)',
-      details: 'Transferência de atendimento para Filial Jardins (Carla Prado).',
-      badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
-    },
-    {
-      id: 'aud_104',
-      timestamp: 'Hoje às 11:05:18',
-      action: 'AUTH_LOGIN',
-      actor: 'Carlos Mendes (Gerente)',
-      entity: 'Sessão Web',
-      details: 'Login autenticado com sucesso via Supabase Auth.',
-      badgeClass: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
-    },
-    {
-      id: 'aud_105',
-      timestamp: 'Hoje às 09:40:12',
-      action: 'SALE_CONFIRMED',
-      actor: 'Bruno Lima (Atendente)',
-      entity: 'Venda #6658 (R$ 78,50)',
-      details: 'Confirmação humana de pedido com entrega em domicílio.',
-      badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30',
-    },
-  ];
+  const fetchAuditLogs = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const res = await fetch('/api/audit', { cache: 'no-store' });
+      if (!res.ok) {
+        throw new Error(`Falha ao carregar auditoria (${res.status})`);
+      }
+      const data = await res.json();
+      if (data.logs && Array.isArray(data.logs)) {
+        setAuditLogs(data.logs);
+      }
+    } catch (err: any) {
+      console.error('Erro ao consultar trilha de auditoria:', err);
+      setError(err.message || 'Erro de conexão com o banco de dados');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchAuditLogs();
+  }, [fetchAuditLogs]);
 
   const filteredLogs = auditLogs.filter(
     (log) =>
       log.action.toLowerCase().includes(searchTerm.toLowerCase()) ||
       log.actor.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.details.toLowerCase().includes(searchTerm.toLowerCase())
+      log.details.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      log.entity.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -71,22 +60,41 @@ export default function AuditPage() {
             Trilha de Auditoria Operacional
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Registro imutável append-only de confirmações de vendas, transferências e acessos ao sistema.
+            Registro imutável append-only de confirmações de vendas, transferências e acessos no Supabase.
           </p>
         </div>
 
-        {/* Busca */}
-        <div className="relative w-full md:w-72">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Buscar evento, ator ou ação..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-          />
+        <div className="flex items-center gap-3">
+          {/* Busca */}
+          <div className="relative w-full md:w-72">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Buscar evento, ator ou ação..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          <button
+            onClick={fetchAuditLogs}
+            disabled={isLoading}
+            className="p-2 bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-300 rounded-xl transition-colors disabled:opacity-50 flex items-center gap-1.5 text-xs font-semibold px-3"
+            title="Atualizar trilha de auditoria"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-emerald-400' : ''}`} />
+            <span className="hidden sm:inline">Atualizar</span>
+          </button>
         </div>
       </div>
+
+      {error && (
+        <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-xl flex items-center gap-2 text-xs text-red-400">
+          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Tabela de Auditoria */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
@@ -94,7 +102,7 @@ export default function AuditPage() {
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950/80 border-b border-slate-800 text-[11px] uppercase font-bold text-slate-400 tracking-wider">
               <tr>
-                <th className="py-3.5 px-4">Horário (UTC)</th>
+                <th className="py-3.5 px-4">Horário</th>
                 <th className="py-3.5 px-4">Ação</th>
                 <th className="py-3.5 px-4">Responsável</th>
                 <th className="py-3.5 px-4">Entidade Relacionada</th>
@@ -102,28 +110,43 @@ export default function AuditPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800">
-              {filteredLogs.map((log) => (
-                <tr key={log.id} className="hover:bg-slate-800/40 transition-colors">
-                  <td className="py-3 px-4 text-slate-400 whitespace-nowrap font-mono flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-slate-500" />
-                    {log.timestamp}
-                  </td>
-                  <td className="py-3 px-4 whitespace-nowrap">
-                    <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${log.badgeClass}`}>
-                      {log.action}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 text-slate-200 font-medium whitespace-nowrap">
-                    {log.actor}
-                  </td>
-                  <td className="py-3 px-4 text-slate-300 font-mono text-[11px]">
-                    {log.entity}
-                  </td>
-                  <td className="py-3 px-4 text-slate-400 max-w-md">
-                    {log.details}
+              {isLoading && auditLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-slate-500 text-xs">
+                    <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-emerald-500" />
+                    Carregando eventos do Supabase...
                   </td>
                 </tr>
-              ))}
+              ) : filteredLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="py-8 text-center text-slate-500 text-xs">
+                    Nenhum registro de auditoria encontrado para a busca.
+                  </td>
+                </tr>
+              ) : (
+                filteredLogs.map((log) => (
+                  <tr key={log.id} className="hover:bg-slate-800/40 transition-colors">
+                    <td className="py-3 px-4 text-slate-400 whitespace-nowrap font-mono flex items-center gap-1.5">
+                      <Clock className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+                      {log.timestamp}
+                    </td>
+                    <td className="py-3 px-4 whitespace-nowrap">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${log.badgeClass}`}>
+                        {log.action}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-slate-200 font-medium whitespace-nowrap">
+                      {log.actor}
+                    </td>
+                    <td className="py-3 px-4 text-slate-300 font-mono text-[11px]">
+                      {log.entity}
+                    </td>
+                    <td className="py-3 px-4 text-slate-400 max-w-md">
+                      {log.details}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

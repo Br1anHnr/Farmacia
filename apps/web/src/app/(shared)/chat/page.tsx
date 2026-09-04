@@ -58,9 +58,10 @@ export default function InternalChatPage() {
       if (res.ok) {
         const data = await res.json();
         if (data.messages) {
+          const currentUserId = currentUser?.user_id || (currentUser as any)?.id;
           const mapped = data.messages.map((m: any) => ({
             ...m,
-            isMe: m.sender_id === (currentUser?.id || '33333333-3333-3333-3333-333333333332') || m.sender === currentUser?.full_name,
+            isMe: (currentUserId && m.sender_id === currentUserId) || m.sender === currentUser?.full_name || (currentUser?.full_name && m.sender?.includes(currentUser.full_name)),
           }));
           setMessages(mapped);
         }
@@ -86,11 +87,14 @@ export default function InternalChatPage() {
 
     setInputText('');
 
-    const senderId = currentUser?.id || '33333333-3333-3333-3333-333333333332';
+    const senderId = currentUser?.user_id || (currentUser as any)?.id || '33333333-3333-3333-3333-333333333331';
+    const senderName = currentUser?.full_name || 'Carlos Mendes (Gerente Geral)';
+    const senderRole = currentUser?.role || 'manager';
+
     const optimisticMsg: Message = {
       id: `temp_${Date.now()}`,
-      sender: currentUser?.full_name || 'Ana Souza',
-      role: currentUser?.role || 'agent',
+      sender: senderName,
+      role: senderRole,
       content,
       time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       isMe: true,
@@ -106,11 +110,12 @@ export default function InternalChatPage() {
           room: selectedRoom,
           content,
           sender_id: senderId,
+          sender_name: senderName,
+          sender_role: senderRole,
         }),
       });
 
       if (res.ok) {
-        // Atualiza para garantir sync com o banco
         fetchMessages(selectedRoom);
       }
     } catch (err) {

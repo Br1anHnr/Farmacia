@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'EMPTY_MESSAGE' }, { status: 400 });
     }
 
-    const senderId = body.sender_id || '33333333-3333-3333-3333-333333333332'; // Ana Souza default
+    const senderId = body.sender_id || '33333333-3333-3333-3333-333333333331';
 
     const insertRes = await supabaseRest<any[]>('internal_messages', {
       method: 'POST',
@@ -91,7 +91,10 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const user = USER_MAP[senderId] || { name: 'Atendente', role: 'agent' };
+    const user = body.sender_name
+      ? { name: body.sender_name, role: body.sender_role || 'agent' }
+      : (USER_MAP[senderId] || { name: 'Carlos Mendes', role: 'manager' });
+
     const newMsg = {
       id: insertRes.data?.[0]?.id || `msg_${Date.now()}`,
       sender: user.name,

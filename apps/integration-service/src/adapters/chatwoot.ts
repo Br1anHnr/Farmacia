@@ -11,6 +11,7 @@ export class ChatwootAdapter {
   public sentMessages: Array<{ conversationId: number; content: string; isPrivate: boolean; timestamp: string }> = [];
   public conversationStatuses: Map<number, string> = new Map();
   public conversationAssignees: Map<number, number> = new Map();
+  public conversationLabels: Map<number, string[]> = new Map();
   public botMessageIds = new Set<number>();
 
   public isBotMessage(id: number): boolean {
@@ -107,10 +108,36 @@ export class ChatwootAdapter {
     }
   }
 
+  public async addLabels(conversationId: number, labels: string[]): Promise<boolean> {
+    const existing = this.conversationLabels.get(conversationId) || [];
+    const merged = Array.from(new Set([...existing, ...labels]));
+    this.conversationLabels.set(conversationId, merged);
+
+    if (CONFIG.MOCK_MODE) {
+      return true;
+    }
+
+    try {
+      const res = await fetch(`${CONFIG.CHATWOOT_BASE_URL}/api/v1/accounts/${CONFIG.CHATWOOT_ACCOUNT_ID}/conversations/${conversationId}/labels`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'api_access_token': CONFIG.CHATWOOT_API_TOKEN,
+        },
+        body: JSON.stringify({ labels: merged }),
+      });
+      return res.ok;
+    } catch (err) {
+      console.error(`[ChatwootAdapter] Erro ao adicionar etiquetas na conv #${conversationId}:`, err);
+      return false;
+    }
+  }
+
   public clearMockHistory(): void {
     this.sentMessages = [];
     this.conversationStatuses.clear();
     this.conversationAssignees.clear();
+    this.conversationLabels.clear();
   }
 }
 

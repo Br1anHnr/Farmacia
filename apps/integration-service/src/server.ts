@@ -147,6 +147,36 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
           };
           const decision = await agentBotService.handleIncomingMessage(fakeConv, fakeMsg);
           console.log(`[Chatwoot Webhook] Decisão da triagem #${convId}:`, decision);
+
+          if (decision.transition_to_human && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
+            try {
+              await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/audit_events`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'apikey': CONFIG.SUPABASE_SECRET_KEY,
+                  'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
+                  'Prefer': 'return=minimal',
+                },
+                body: JSON.stringify({
+                  organization_id: '11111111-1111-1111-1111-111111111111',
+                  actor_email: 'bot.triagem@multifarma.com',
+                  action: 'BOT_HANDOFF_TO_HUMAN',
+                  entity_type: 'conversation',
+                  entity_id: String(convId),
+                  metadata: {
+                    conversation_id: convId,
+                    intent: decision.intent_detected,
+                    reason: decision.reason,
+                    extracted_product: decision.extracted_product_name,
+                  },
+                }),
+              });
+              console.log(`[Supabase Audit] Evento de handoff gravado com sucesso para conv #${convId}`);
+            } catch (auditErr) {
+              console.warn('[Supabase Audit] Falha ao registrar evento de handoff:', auditErr);
+            }
+          }
         }
       }
     }

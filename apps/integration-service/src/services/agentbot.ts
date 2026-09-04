@@ -72,6 +72,7 @@ export class AgentBotService {
       
       await chatwootAdapter.sendMessage(conversationId, botMessage);
       await chatwootAdapter.updateStatus(conversationId, 'open');
+      await chatwootAdapter.addLabels(conversationId, ['receita-medica', 'farmaceutico']);
       this.deactivateBotForConversation(conversationId, 'PRESCRIPTION_RECEIVED');
 
       return {
@@ -95,6 +96,7 @@ export class AgentBotService {
       const botMessage = 'Entendido! Estou transferindo agora mesmo para um de nossos atendentes humanos. Um momento, por favor!';
       await chatwootAdapter.sendMessage(conversationId, botMessage);
       await chatwootAdapter.updateStatus(conversationId, 'open');
+      await chatwootAdapter.addLabels(conversationId, ['atendimento-humano']);
       this.deactivateBotForConversation(conversationId, 'USER_REQUESTED_HUMAN');
 
       return {
@@ -115,6 +117,7 @@ export class AgentBotService {
 
       await chatwootAdapter.sendMessage(conversationId, botMessage);
       await chatwootAdapter.updateStatus(conversationId, 'open');
+      await chatwootAdapter.addLabels(conversationId, ['venda-medicamento', 'comercial']);
       this.deactivateBotForConversation(conversationId, 'BUY_PRODUCT_HANDOFF');
 
       return {
@@ -140,6 +143,7 @@ export class AgentBotService {
       const botMessage = 'Você gostaria de consultar o status da sua entrega? Já chamei um atendente para localizar seu pedido!';
       await chatwootAdapter.sendMessage(conversationId, botMessage);
       await chatwootAdapter.updateStatus(conversationId, 'open');
+      await chatwootAdapter.addLabels(conversationId, ['status-pedido', 'logistica']);
       this.deactivateBotForConversation(conversationId, 'CHECK_ORDER');
 
       return {
@@ -155,6 +159,7 @@ export class AgentBotService {
     // 7. Saudação Inicial / Triagem Genérica
     const greetingMessage = '👋 Olá! Seja bem-vindo(a) à MultiFarma.\nComo podemos te ajudar hoje?\n1️⃣ Comprar medicamentos ou perfumaria\n2️⃣ Enviar uma receita médica\n3️⃣ Consultar um pedido em andamento\n4️⃣ Falar com um atendente\n\nVocê já pode adiantar o que precisa por aqui!';
     await chatwootAdapter.sendMessage(conversationId, greetingMessage);
+    await chatwootAdapter.addLabels(conversationId, ['triagem-bot']);
     this.setConversationState(conversationId, 'TRIAGING');
 
     return {
