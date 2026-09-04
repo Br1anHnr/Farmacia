@@ -114,14 +114,18 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
         if (agentBotService.getConversationState(convId) === 'BOT_ACTIVE') {
           const fakeMsg = {
             id: typeof event.id === 'number' ? event.id : Date.now(),
-            content: event.content || '',
-            message_type: 'incoming' as const,
-            created_at: Math.floor(Date.now() / 1000),
+            inbox_id: 1,
             conversation_id: convId,
+            message_type: 'incoming' as const,
+            content: event.content || '',
+            content_type: 'text',
+            created_at: Math.floor(Date.now() / 1000),
+            private: false,
             attachments: event.attachments,
           };
           const fakeConv = {
             id: convId,
+            account_id: 1,
             status: event.conversation?.status || 'pending',
             inbox_id: 1,
           };

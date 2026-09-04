@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ChatwootMessageSchema, ChatwootConversationSchema } from './chatwoot.js';
+import { ChatwootMessageSchema, ChatwootConversationSchema } from './chatwoot';
 
 export const PharmacyIntentSchema = z.enum([
   'BUY_PRODUCT',

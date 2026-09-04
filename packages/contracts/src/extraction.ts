@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FulfillmentMethodSchema } from './sales.js';
+import { FulfillmentMethodSchema } from './sales';
 
 export const ExtractionSuggestionStatusSchema = z.enum(['pending', 'accepted', 'rejected']);
 export type ExtractionSuggestionStatus = z.infer<typeof ExtractionSuggestionStatusSchema>;
