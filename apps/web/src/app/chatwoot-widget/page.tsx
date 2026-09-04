@@ -40,14 +40,32 @@ export default function ChatwootWidgetPage() {
     const raw = localStorage.getItem('mf_user_context');
     if (raw) {
       try {
-        setCurrentUser(JSON.parse(raw) as UserContext);
+        const u = JSON.parse(raw) as UserContext;
+        setCurrentUser(u);
+        if (u.full_name) setActiveAgentName(u.full_name.split(' (')[0]);
+        return;
       } catch {
         // ignore
       }
     }
+    fetch('/api/auth/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.user) {
+          setCurrentUser(d.user);
+          localStorage.setItem('mf_user_context', JSON.stringify(d.user));
+          if (d.user.full_name) setActiveAgentName(d.user.full_name.split(' (')[0]);
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // ignore
+    }
     document.cookie = `${AUTH_COOKIE_NAME}=; path=/; max-age=0;`;
     localStorage.removeItem('mf_user_context');
     router.push('/login');

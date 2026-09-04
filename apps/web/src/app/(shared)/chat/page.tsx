@@ -34,13 +34,28 @@ export default function InternalChatPage() {
     if (raw) {
       try {
         setCurrentUser(JSON.parse(raw) as UserContext);
+        return;
       } catch {
         // ignore
       }
     }
+    fetch('/api/auth/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.user) {
+          setCurrentUser(d.user);
+          localStorage.setItem('mf_user_context', JSON.stringify(d.user));
+        }
+      })
+      .catch(() => {});
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // ignore
+    }
     document.cookie = `${AUTH_COOKIE_NAME}=; path=/; max-age=0;`;
     localStorage.removeItem('mf_user_context');
     router.push('/login');

@@ -2,6 +2,7 @@
   "name": "projeto-multifarma",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Hub Omnichannel de Atendimento e Vendas para Farmácia",
   "workspaces": [
     "packages/*",
@@ -13,6 +14,7 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "dev": "npm run dev --workspaces --if-present",
+    "seed:auth": "node scripts/seed-auth-users.js",
     "start": "node scripts/start-production.js"
   },
   "devDependencies": {

@@ -50,3 +50,44 @@ describe('Regra Crítica de Segurança e Acesso ao Dashboard', () => {
     expect(body.sales_by_branch.length).toBeGreaterThanOrEqual(2);
   });
 });
+
+import { middleware } from '../middleware';
+
+describe('Middleware de Proteção de Rotas e RBAC', () => {
+  it('Redireciona usuário deslogado tentando acessar /dashboard para /login', () => {
+    const req = new NextRequest('http://localhost:3000/dashboard');
+    const res = middleware(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('/login?redirect=%2Fdashboard');
+  });
+
+  it('Retorna HTTP 401 para chamada de API gerencial deslogada', async () => {
+    const req = new NextRequest('http://localhost:3000/api/dashboard/summary');
+    const res = middleware(req);
+    expect(res.status).toBe(401);
+    const body = await res.json();
+    expect(body.error).toBe('UNAUTHENTICATED');
+  });
+
+  it('Redireciona atendente logado tentando acessar /dashboard para /access-denied', () => {
+    const req = new NextRequest('http://localhost:3000/dashboard', {
+      headers: {
+        cookie: 'sb_access_token=token_valido; mf_user_role=agent',
+      },
+    });
+    const res = middleware(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get('location')).toContain('/access-denied?role=agent');
+  });
+
+  it('Permite passagem do gerente autenticado para /dashboard', () => {
+    const req = new NextRequest('http://localhost:3000/dashboard', {
+      headers: {
+        cookie: 'sb_access_token=token_valido; mf_user_role=manager',
+      },
+    });
+    const res = middleware(req);
+    expect(res.status).toBe(200);
+  });
+});
+
