@@ -170,9 +170,42 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
 });
 
 // 4. Endpoint para o Painel Lateral (Dashboard App) consultar sugestões extraídas
-app.get('/api/conversations/:id/suggestions', (req: Request, res: Response) => {
+app.get('/api/conversations/:id/suggestions', async (req: Request, res: Response) => {
   const convId = parseInt(req.params.id || '0', 10);
-  const suggestions = silentExtractionService.getSuggestionsForConversation(convId);
+  let suggestions = silentExtractionService.getSuggestionsForConversation(convId);
+
+  // Se a lista em memória estiver vazia (ex: container acabou de reiniciar), consulta histórico no Chatwoot
+  if (suggestions.length === 0 && convId > 0 && CONFIG.CHATWOOT_API_TOKEN) {
+    try {
+      const chatwootRes = await fetch(
+        `${CONFIG.CHATWOOT_BASE_URL}/api/v1/accounts/${CONFIG.CHATWOOT_ACCOUNT_ID}/conversations/${convId}/messages`,
+        {
+          headers: { api_access_token: CONFIG.CHATWOOT_API_TOKEN },
+        }
+      );
+      if (chatwootRes.ok) {
+        const data = (await chatwootRes.json()) as {
+          payload?: Array<{ id: number; content: string; message_type: number }>;
+        };
+        if (data?.payload && Array.isArray(data.payload)) {
+          for (const m of data.payload) {
+            if (m.content && (m.message_type === 0 || (m as any).message_type === 'incoming')) {
+              silentExtractionService.extractFromText(
+                '11111111-1111-1111-1111-111111111111',
+                convId,
+                m.id,
+                m.content
+              );
+            }
+          }
+          suggestions = silentExtractionService.getSuggestionsForConversation(convId);
+        }
+      }
+    } catch (err) {
+      console.warn(`[Suggestions Endpoint] Aviso: consulta ao Chatwoot falhou para conv #${convId}:`, err);
+    }
+  }
+
   res.status(200).json({ suggestions });
 });
 

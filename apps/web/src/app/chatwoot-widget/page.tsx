@@ -53,11 +53,12 @@ export default function ChatwootWidgetPage() {
   };
 
   // Contexto da conversa do Chatwoot (recebido via postMessage ou parâmetros de URL)
-  const [conversationId, setConversationId] = useState<number>(101);
-  const [customerName, setCustomerName] = useState<string>('João da Silva');
-  const [customerPhone, setCustomerPhone] = useState<string>('+55 (11) 98888-7777');
+  const [conversationId, setConversationId] = useState<number>(2);
+  const [customerName, setCustomerName] = useState<string>('Brian Henrique');
+  const [customerPhone, setCustomerPhone] = useState<string>('+55 (12) 98283-9041');
   const [channel, setChannel] = useState<string>('whatsapp');
   const [branchName, setBranchName] = useState<string>('Matriz Centro');
+  const [appliedFeedback, setAppliedFeedback] = useState(false);
 
   // Sugestões extraídas silenciosamente pela IA
   const [aiSuggestion, setAiSuggestion] = useState<{
@@ -69,19 +70,17 @@ export default function ChatwootWidgetPage() {
     confidence: number;
   } | null>({
     product: 'Dipirona 500mg 20 comp',
-    qty: 2,
+    qty: 1,
     price: 8.50,
-    fulfillment: 'delivery',
-    address: 'Rua das Flores, 123 - Centro',
-    confidence: 0.88,
+    fulfillment: 'pickup',
+    address: 'Retirada no Balcão',
+    confidence: 0.95,
   });
 
-  // Estado do formulário de venda
-  const [cart, setCart] = useState<CartItem[]>([
-    { id: '1', name: 'Dipirona 500mg 20 comp', unitPrice: 8.50, quantity: 2 },
-  ]);
-  const [fulfillmentMethod, setFulfillmentMethod] = useState<'delivery' | 'pickup'>('delivery');
-  const [deliveryAddress, setDeliveryAddress] = useState('Rua das Flores, 123 - Centro');
+  // Estado do formulário de venda (inicia limpo para feedback claro do usuário)
+  const [cart, setCart] = useState<CartItem[]>([]);
+  const [fulfillmentMethod, setFulfillmentMethod] = useState<'delivery' | 'pickup'>('pickup');
+  const [deliveryAddress, setDeliveryAddress] = useState('Retirada no Balcão');
   const [discount, setDiscount] = useState<number>(0);
   const [isConfirmed, setIsConfirmed] = useState(false);
   const [confirmedSaleId, setConfirmedSaleId] = useState<string | null>(null);
@@ -97,21 +96,39 @@ export default function ChatwootWidgetPage() {
     { name: 'Vitamina C 1g efervescente', price: 19.90 },
   ];
 
-  // Escuta evento postMessage do Chatwoot no iframe
+  // Handshake bidirecional com o Chatwoot no iframe
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // 1. Verificar parâmetros na URL (se existirem)
+    const params = new URLSearchParams(window.location.search);
+    const qConv = params.get('conversation_id') || params.get('id');
+    const qName = params.get('contact_name') || params.get('name');
+    const qPhone = params.get('contact_phone') || params.get('phone');
+    if (qConv) setConversationId(parseInt(qConv, 10));
+    if (qName) setCustomerName(qName);
+    if (qPhone) setCustomerPhone(qPhone);
+
+    // 2. Solicitar contexto ao Chatwoot via postMessage
+    const requestContext = () => {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage('chatwoot-dashboard-app:fetch-info', '*');
+      }
+    };
+
+    requestContext();
+    const t1 = setTimeout(requestContext, 800);
+    const t2 = setTimeout(requestContext, 2000);
+
     const handleChatwootMessage = (event: MessageEvent) => {
       try {
         const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-        if (data.event === 'chatwoot:ready' || data.event === 'appContext') {
-          if (data.data?.conversation?.id) {
-            setConversationId(data.data.conversation.id);
-          }
-          if (data.data?.contact?.name) {
-            setCustomerName(data.data.contact.name);
-          }
-          if (data.data?.contact?.phone_number) {
-            setCustomerPhone(data.data.contact.phone_number);
-          }
+        if (data?.event === 'chatwoot:ready' || data?.event === 'appContext') {
+          const conv = data.data?.conversation;
+          const contact = data.data?.contact;
+          if (conv?.id) setConversationId(conv.id);
+          if (contact?.name) setCustomerName(contact.name);
+          if (contact?.phone_number) setCustomerPhone(contact.phone_number);
         }
       } catch {
         // ignora mensagens que não sejam JSON do chatwoot
@@ -119,8 +136,43 @@ export default function ChatwootWidgetPage() {
     };
 
     window.addEventListener('message', handleChatwootMessage);
-    return () => window.removeEventListener('message', handleChatwootMessage);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      window.removeEventListener('message', handleChatwootMessage);
+    };
   }, []);
+
+  // Busca sugestões reais extraídas pelo backend
+  useEffect(() => {
+    if (!conversationId) return;
+
+    const fetchSuggestions = async () => {
+      try {
+        const res = await fetch(`/api/conversations/${conversationId}/suggestions`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.suggestions && data.suggestions.length > 0) {
+            const latest = data.suggestions[data.suggestions.length - 1];
+            setAiSuggestion({
+              product: latest.suggested_product_name || 'Dipirona 500mg 20 comp',
+              qty: latest.suggested_quantity || 1,
+              price: latest.suggested_unit_price || 8.50,
+              fulfillment: latest.suggested_fulfillment || 'pickup',
+              address: latest.suggested_address || 'Retirada no Balcão',
+              confidence: latest.confidence || 0.92,
+            });
+            setFulfillmentMethod(latest.suggested_fulfillment || 'pickup');
+            if (latest.suggested_address) setDeliveryAddress(latest.suggested_address);
+          }
+        }
+      } catch (err) {
+        console.error('Erro ao buscar sugestão de IA:', err);
+      }
+    };
+
+    fetchSuggestions();
+  }, [conversationId]);
 
   // Cálculos financeiros
   const subtotal = cart.reduce((acc, item) => acc + item.unitPrice * item.quantity, 0);
@@ -138,6 +190,8 @@ export default function ChatwootWidgetPage() {
     ]);
     setFulfillmentMethod(aiSuggestion.fulfillment);
     if (aiSuggestion.address) setDeliveryAddress(aiSuggestion.address);
+    setAppliedFeedback(true);
+    setTimeout(() => setAppliedFeedback(false), 3000);
   };
 
   const handleAddItem = (item: { name: string; price: number }) => {
@@ -161,13 +215,10 @@ export default function ChatwootWidgetPage() {
     setIsSubmitting(true);
 
     try {
-      // Simula confirmação com chamada ao Supabase / API
-      const fakeSaleId = `sale_${Math.floor(1000 + Math.random() * 9000)}`;
-      
       const payload = {
         organization_id: '11111111-1111-1111-1111-111111111111',
         branch_id: '22222222-2222-2222-2222-222222222221',
-        chatwoot_conversation_id: conversationId,
+        chatwoot_conversation_id: conversationId || 2,
         channel,
         customer_name: customerName,
         customer_phone: customerPhone,
@@ -185,12 +236,20 @@ export default function ChatwootWidgetPage() {
         origin_type: aiSuggestion ? 'ai_suggested' : 'manual',
       };
 
-      console.log('[Dashboard App] Confirmando venda no Supabase:', payload);
+      console.log('[Dashboard App] Confirmando venda real no Supabase:', payload);
 
-      // Simulação de delay de gravação e registro de auditoria
-      await new Promise((r) => setTimeout(r, 600));
+      const res = await fetch('/api/sales', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-      setConfirmedSaleId(fakeSaleId);
+      if (!res.ok) {
+        throw new Error(`Erro na API de vendas: ${res.statusText}`);
+      }
+
+      const createdSale = await res.json();
+      setConfirmedSaleId(createdSale.id || `sale_${Date.now()}`);
       setIsConfirmed(true);
     } catch (err) {
       console.error('Erro ao confirmar venda:', err);
@@ -304,9 +363,23 @@ export default function ChatwootWidgetPage() {
 
           <button
             onClick={handleApplySuggestion}
-            className="w-full py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-[11px] transition-colors flex items-center justify-center gap-1.5 shadow-sm"
+            className={`w-full py-2 rounded-lg font-semibold text-[11px] transition-all flex items-center justify-center gap-1.5 shadow-sm ${
+              appliedFeedback
+                ? 'bg-emerald-500 text-white ring-2 ring-emerald-400 animate-pulse'
+                : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+            }`}
           >
-            <span>Preencher Formulário com Sugestão</span>
+            {appliedFeedback ? (
+              <>
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>Sugestão Aplicada ao Carrinho!</span>
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Preencher Formulário com Sugestão</span>
+              </>
+            )}
           </button>
         </div>
       )}

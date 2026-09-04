@@ -48,68 +48,77 @@ export default function InternalChatPage() {
 
   const [selectedRoom, setSelectedRoom] = useState<'geral' | 'jardins'>('geral');
   const [inputText, setInputText] = useState('');
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const [messagesGeral, setMessagesGeral] = useState<Message[]>([
-    {
-      id: '1',
-      sender: 'Carlos Mendes (Gerente)',
-      role: 'manager',
-      content: 'Boas-vindas à equipe de atendimento no novo Hub da Farmácia!',
-      time: '09:00',
-      isMe: false,
-    },
-    {
-      id: '2',
-      sender: 'Ana Souza',
-      role: 'agent',
-      content: 'Bom dia Carlos! Já conectamos a linha de homologação do WhatsApp e os testes estão fluindo.',
-      time: '09:12',
-      isMe: true,
-    },
-    {
-      id: '3',
-      sender: 'Bruno Lima',
-      role: 'agent',
-      content: 'Aqui na Filial Jardins estamos a postos para receber as transferências de entregas da região.',
-      time: '09:20',
-      isMe: false,
-    },
-  ]);
+  // Buscar mensagens do Supabase via API
+  const fetchMessages = async (room: string) => {
+    try {
+      const res = await fetch(`/api/chat/messages?room=${room}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.messages) {
+          const mapped = data.messages.map((m: any) => ({
+            ...m,
+            isMe: m.sender_id === (currentUser?.id || '33333333-3333-3333-3333-333333333332') || m.sender === currentUser?.full_name,
+          }));
+          setMessages(mapped);
+        }
+      }
+    } catch (err) {
+      console.error('Erro ao carregar mensagens:', err);
+    }
+  };
 
-  const [messagesJardins, setMessagesJardins] = useState<Message[]>([
-    {
-      id: '4',
-      sender: 'Bruno Lima',
-      role: 'agent',
-      content: 'Aviso Filial Jardins: motoboy de plantão disponível até as 22h hoje.',
-      time: '11:45',
-      isMe: false,
-    },
-  ]);
+  // Carrega ao trocar de sala ou usuário e mantém polling de 3 segundos
+  useEffect(() => {
+    fetchMessages(selectedRoom);
+    const interval = setInterval(() => {
+      fetchMessages(selectedRoom);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [selectedRoom, currentUser]);
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim()) return;
+    const content = inputText.trim();
+    if (!content) return;
 
-    const newMsg: Message = {
-      id: String(Date.now()),
-      sender: 'Ana Souza',
-      role: 'agent',
-      content: inputText.trim(),
+    setInputText('');
+
+    const senderId = currentUser?.id || '33333333-3333-3333-3333-333333333332';
+    const optimisticMsg: Message = {
+      id: `temp_${Date.now()}`,
+      sender: currentUser?.full_name || 'Ana Souza',
+      role: currentUser?.role || 'agent',
+      content,
       time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       isMe: true,
     };
 
-    if (selectedRoom === 'geral') {
-      setMessagesGeral((prev) => [...prev, newMsg]);
-    } else {
-      setMessagesJardins((prev) => [...prev, newMsg]);
-    }
+    setMessages((prev) => [...prev, optimisticMsg]);
 
-    setInputText('');
+    try {
+      const res = await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          room: selectedRoom,
+          content,
+          sender_id: senderId,
+        }),
+      });
+
+      if (res.ok) {
+        // Atualiza para garantir sync com o banco
+        fetchMessages(selectedRoom);
+      }
+    } catch (err) {
+      console.error('Erro ao enviar mensagem:', err);
+    }
   };
 
-  const currentMessages = selectedRoom === 'geral' ? messagesGeral : messagesJardins;
+  const currentMessages = messages;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased">

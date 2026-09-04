@@ -12,5 +12,5 @@ export const CONFIG = {
   EVOLUTION_INSTANCE_NAME: process.env.EVOLUTION_INSTANCE_NAME || 'Farmacia',
   SUPABASE_URL: process.env.SUPABASE_URL || 'https://iabrqshxnrbznbypilmk.supabase.co',
   SUPABASE_SECRET_KEY: process.env.SUPABASE_SECRET_KEY || '',
-  MOCK_MODE: process.env.MOCK_MODE === 'true',
+  MOCK_MODE: process.env.MOCK_MODE === 'true' || process.env.NODE_ENV === 'test',
 };
