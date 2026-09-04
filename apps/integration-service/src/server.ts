@@ -98,16 +98,35 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
     if (event.event === 'message_created') {
       if (convId && (event.message_type === 'outgoing' || event.private)) {
         agentBotService.deactivateBotForConversation(convId, 'AGENT_SENT_MESSAGE_WEBHOOK');
-      }
+      } else if (convId && (event.message_type === 'incoming' || (event as { message_type?: number }).message_type === 0)) {
+        // Mensagem recebida do cliente no WhatsApp
+        // 1. Extração silenciosa de dados comerciais para a Dashboard App
+        if (event.content) {
+          silentExtractionService.extractFromText(
+            '11111111-1111-1111-1111-111111111111',
+            convId,
+            typeof event.id === 'number' ? event.id : 1,
+            event.content
+          );
+        }
 
-      // Extração silenciosa de dados comerciais caso a mensagem seja do cliente ou atendente
-      if (convId && event.content) {
-        silentExtractionService.extractFromText(
-          '11111111-1111-1111-1111-111111111111', // Organização padrão homologação
-          convId,
-          typeof event.id === 'number' ? event.id : 1,
-          event.content
-        );
+        // 2. Disparo do Bot de Triagem (se bot estiver ativo para essa conversa)
+        if (agentBotService.getConversationState(convId) === 'BOT_ACTIVE') {
+          const fakeMsg = {
+            id: typeof event.id === 'number' ? event.id : Date.now(),
+            content: event.content || '',
+            message_type: 'incoming' as const,
+            created_at: Math.floor(Date.now() / 1000),
+            conversation_id: convId,
+            attachments: event.attachments,
+          };
+          const fakeConv = {
+            id: convId,
+            status: event.conversation?.status || 'pending',
+            inbox_id: 1,
+          };
+          await agentBotService.handleIncomingMessage(fakeConv, fakeMsg);
+        }
       }
     }
 
