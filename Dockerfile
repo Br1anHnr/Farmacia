@@ -11,21 +11,18 @@ COPY packages/ui/package.json ./packages/ui/
 COPY apps/web/package.json ./apps/web/
 COPY apps/integration-service/package.json ./apps/integration-service/
 
-# Instalar dependencias completas (incluindo TypeScript e Webpack)
-ENV NODE_ENV=development
+# Instalar dependencias completas (incluindo devDependencies necessarias para tsc e next build)
 RUN npm ci --include=dev
 
 # Copiar o restante dos fontes
 COPY . .
 
-# Variaveis de build
+# Variaveis de build em modo de producao oficial do Next.js
+ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Compilar pacotes, backend e Next.js
 RUN npm run build
-
-# Definir producao para o runtime final
-ENV NODE_ENV=production
 
 # Portas dos servicos
 EXPOSE 3000
