@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   ShoppingBag,
   CheckCircle2,
@@ -16,7 +18,11 @@ import {
   Building2,
   ShieldCheck,
   RefreshCw,
+  LogOut,
+  MessagesSquare,
+  LayoutDashboard,
 } from 'lucide-react';
+import { AUTH_COOKIE_NAME, type UserContext } from '@/lib/auth-store';
 
 interface CartItem {
   id: string;
@@ -26,6 +32,26 @@ interface CartItem {
 }
 
 export default function ChatwootWidgetPage() {
+  const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<UserContext | null>(null);
+
+  useEffect(() => {
+    const raw = localStorage.getItem('mf_user_context');
+    if (raw) {
+      try {
+        setCurrentUser(JSON.parse(raw) as UserContext);
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
+  const handleLogout = () => {
+    document.cookie = `${AUTH_COOKIE_NAME}=; path=/; max-age=0;`;
+    localStorage.removeItem('mf_user_context');
+    router.push('/login');
+  };
+
   // Contexto da conversa do Chatwoot (recebido via postMessage ou parâmetros de URL)
   const [conversationId, setConversationId] = useState<number>(101);
   const [customerName, setCustomerName] = useState<string>('João da Silva');
@@ -175,6 +201,55 @@ export default function ChatwootWidgetPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-4 font-sans text-xs antialiased">
+      {/* Barra de Navegação Superior e Troca de Usuário */}
+      <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-2.5 mb-4 flex items-center justify-between shadow-lg">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center font-bold">
+            <Stethoscope className="w-4 h-4" />
+          </div>
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-white text-xs">MultiFarma Hub</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold uppercase tracking-wider">
+                {currentUser?.role || 'Atendente'}
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400 font-medium">
+              {currentUser?.full_name || 'Ana Clara'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Link
+            href="/chat"
+            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium flex items-center gap-1.5 border border-slate-700 transition-colors"
+          >
+            <MessagesSquare className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Chat da Equipe</span>
+          </Link>
+
+          {currentUser?.role === 'manager' && (
+            <Link
+              href="/dashboard"
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              <span>Dashboard</span>
+            </Link>
+          )}
+
+          <button
+            onClick={handleLogout}
+            title="Sair / Trocar Usuário"
+            className="px-2.5 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 text-xs font-medium flex items-center gap-1.5 transition-colors"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            <span>Sair</span>
+          </button>
+        </div>
+      </div>
+
       {/* Header do Widget Lateral */}
       <div className="border-b border-slate-800 pb-3 mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">

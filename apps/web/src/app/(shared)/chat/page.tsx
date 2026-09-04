@@ -1,8 +1,20 @@
 'use client';
 
-import React, { useState } from 'react';
-import { MessagesSquare, Send, Users, Building2, Radio, ArrowLeft } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import {
+  MessagesSquare,
+  Send,
+  Users,
+  Building2,
+  Radio,
+  ArrowLeft,
+  LogOut,
+  LayoutDashboard,
+  ShoppingBag,
+} from 'lucide-react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { AUTH_COOKIE_NAME, type UserContext } from '@/lib/auth-store';
 
 interface Message {
   id: string;
@@ -14,6 +26,26 @@ interface Message {
 }
 
 export default function InternalChatPage() {
+  const router = useRouter();
+  const [currentUser, setCurrentUser] = useState<UserContext | null>(null);
+
+  useEffect(() => {
+    const raw = localStorage.getItem('mf_user_context');
+    if (raw) {
+      try {
+        setCurrentUser(JSON.parse(raw) as UserContext);
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
+  const handleLogout = () => {
+    document.cookie = `${AUTH_COOKIE_NAME}=; path=/; max-age=0;`;
+    localStorage.removeItem('mf_user_context');
+    router.push('/login');
+  };
+
   const [selectedRoom, setSelectedRoom] = useState<'geral' | 'jardins'>('geral');
   const [inputText, setInputText] = useState('');
 
@@ -85,10 +117,14 @@ export default function InternalChatPage() {
       <header className="h-16 border-b border-slate-800 bg-slate-900/70 px-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link
-            href="/dashboard"
-            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
+            href={currentUser?.role === 'manager' ? '/dashboard' : '/chatwoot-widget'}
+            title={currentUser?.role === 'manager' ? 'Voltar ao Dashboard' : 'Voltar ao Painel do Atendente'}
+            className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors flex items-center gap-1.5 text-xs font-medium"
           >
             <ArrowLeft className="w-4 h-4" />
+            <span className="hidden sm:inline">
+              {currentUser?.role === 'manager' ? 'Dashboard' : 'Painel de Vendas'}
+            </span>
           </Link>
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-xl bg-emerald-600/20 text-emerald-400 border border-emerald-500/30">
@@ -96,14 +132,54 @@ export default function InternalChatPage() {
             </div>
             <div>
               <h1 className="text-sm font-bold text-white">Comunicação Interna da Equipe</h1>
-              <p className="text-[11px] text-slate-400">Salas independentes via Supabase Realtime</p>
+              <p className="text-[11px] text-slate-400">Salas em tempo real • Supabase Realtime</p>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-slate-400">
-          <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-          <span>3 Atendentes Online</span>
+        <div className="flex items-center gap-3 text-xs">
+          <div className="hidden lg:flex items-center gap-2 text-slate-400 mr-1">
+            <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+            <span>3 Atendentes Online</span>
+          </div>
+
+          <Link
+            href="/chatwoot-widget"
+            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-medium flex items-center gap-1.5 border border-slate-700 transition-colors"
+          >
+            <ShoppingBag className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Painel do Atendente</span>
+          </Link>
+
+          {currentUser?.role === 'manager' && (
+            <Link
+              href="/dashboard"
+              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-medium flex items-center gap-1.5 transition-colors"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5" />
+              <span>Dashboard</span>
+            </Link>
+          )}
+
+          <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
+            <div className="text-right hidden sm:block">
+              <p className="font-semibold text-slate-200 text-[11px] leading-none">
+                {currentUser?.full_name || 'Ana Clara'}
+              </p>
+              <p className="text-[10px] text-emerald-400 uppercase tracking-wider font-bold mt-0.5">
+                {currentUser?.role || 'agent'}
+              </p>
+            </div>
+
+            <button
+              onClick={handleLogout}
+              title="Sair / Trocar de Usuário"
+              className="p-2 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 transition-colors flex items-center gap-1"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline text-xs font-semibold">Sair</span>
+            </button>
+          </div>
         </div>
       </header>
 

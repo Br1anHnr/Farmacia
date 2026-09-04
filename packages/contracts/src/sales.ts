@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ChannelTypeSchema } from './chatwoot';
+import { ChannelTypeSchema } from './chatwoot.js';
 
 export const SaleStatusSchema = z.enum(['draft', 'confirmed', 'cancelled']);
 export type SaleStatus = z.infer<typeof SaleStatusSchema>;
