@@ -12,7 +12,8 @@
     "test": "vitest run",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
-    "dev": "npm run dev --workspaces --if-present"
+    "dev": "npm run dev --workspaces --if-present",
+    "start": "node scripts/start-production.js"
   },
   "devDependencies": {
     "typescript": "5.6.3",
