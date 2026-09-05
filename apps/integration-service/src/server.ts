@@ -1,435 +1,228 @@
-import express, { type Request, type Response } from 'express';
-import cors from 'cors';
-import { CONFIG } from './config.js';
-import { idempotencyService } from './services/idempotency.js';
-import { agentBotService } from './services/agentbot.js';
-import { silentExtractionService } from './services/extraction.js';
-import { evolutionAdapter } from './adapters/evolution.js';
-import { chatwootAdapter } from './adapters/chatwoot.js';
+import express, { type Request, type Response } from "express";
+import { CONFIG } from "./config.js";
+import { agentBotService } from "./services/agentbot.js";
 import {
-  AgentBotPayloadSchema,
-  ChatwootWebhookEventSchema,
-} from '@hub-farmacia/contracts';
-
+  validSignature,
+  validInternalToken,
+  eventDigest,
+} from "./services/webhook-security.js";
 export const app = express();
-app.use(cors());
-app.use(express.json({ limit: '5mb' }));
-
-// 1. Health Check Endpoint
-app.get('/internal/health', async (_req: Request, res: Response) => {
-  const evolutionState = await evolutionAdapter.getConnectionState();
-  res.status(200).json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    version: '0.1.0',
-    mock_mode: CONFIG.MOCK_MODE,
-    evolution: {
-      instance: evolutionState.instanceName,
-      state: evolutionState.state,
-      status: evolutionState.status,
+app.disable("x-powered-by");
+app.use(
+  express.json({
+    limit: "256kb",
+    verify(req, _res, buf) {
+      (req as Request & { rawBody: Buffer }).rawBody = buf;
     },
-    chatwoot: {
-      base_url: CONFIG.CHATWOOT_BASE_URL,
-      status: 'connected',
+  }),
+);
+async function rpc(name: string, body: unknown) {
+  if (!CONFIG.SUPABASE_URL || !CONFIG.SUPABASE_SECRET_KEY)
+    throw new Error("PERSISTENCE_UNAVAILABLE");
+  const response = await fetch(CONFIG.SUPABASE_URL + "/rest/v1/rpc/" + name, {
+    method: "POST",
+    headers: {
+      apikey: CONFIG.SUPABASE_SECRET_KEY,
+      Authorization: "Bearer " + CONFIG.SUPABASE_SECRET_KEY,
+      "Content-Type": "application/json",
     },
-    service: 'MultiFarma Integration Hub',
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
-});
-
-// 2. Chatwoot AgentBot Endpoint
-app.post('/internal/chatwoot/agent-bot', async (req: Request, res: Response) => {
-  try {
-    const parseResult = AgentBotPayloadSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({
-        error: 'INVALID_PAYLOAD',
-        details: parseResult.error.errors,
-      });
-    }
-
-    const { conversation, message } = parseResult.data;
-    if (!message) {
-      return res.status(200).json({ status: 'NO_MESSAGE' });
-    }
-
-    // Chave de idempotência única por mensagem
-    const idempotencyKey = `agentbot_msg_${message.id}`;
-    if (!idempotencyService.shouldProcess(idempotencyKey)) {
-      return res.status(200).json({ status: 'DUPLICATE_IGNORED' });
-    }
-
-    const decision = await agentBotService.handleIncomingMessage(conversation, message);
-    idempotencyService.markCompleted(idempotencyKey, decision);
-
-    return res.status(200).json({
-      status: 'PROCESSED',
-      decision,
-    });
-  } catch (err) {
-    console.error('[AgentBot Endpoint] Erro no processamento:', err);
-    return res.status(500).json({
-      error: 'INTERNAL_ERROR',
-      message: (err as Error).message,
-    });
-  }
-});
-
-// 3. Webhook Geral do Chatwoot
-app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
-  try {
-    const parseResult = ChatwootWebhookEventSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({
-        error: 'INVALID_WEBHOOK_PAYLOAD',
-        details: parseResult.error.errors,
-      });
-    }
-
-    const event = parseResult.data;
-    const eventId = String(event.id || `${event.event}_${Date.now()}`);
-    const idempotencyKey = `webhook_${eventId}`;
-
-    if (!idempotencyService.shouldProcess(idempotencyKey)) {
-      return res.status(200).json({ status: 'DUPLICATE_IGNORED' });
-    }
-
-    const convId = event.conversation?.id;
-    const msgId = typeof event.id === 'number' ? event.id : (typeof event.id === 'string' ? parseInt(event.id, 10) : 0);
-
-    console.log(`[Chatwoot Webhook] Evento: ${event.event}, Conv: #${convId}, Msg: #${msgId}, Tipo: ${event.message_type}, Conteúdo: "${event.content || ''}"`);
-
-    // Processamento de mensagens
-    if (event.event === 'message_created') {
-      const isOutgoing = event.message_type === 'outgoing' || (event as { message_type?: unknown }).message_type === 1;
-      const isIncoming = event.message_type === 'incoming' || (event as { message_type?: unknown }).message_type === 0 || (!event.message_type && !event.private);
-
-      if (convId && (isOutgoing || event.private)) {
-        // Se a mensagem foi enviada pelo próprio bot do Hub, não deve desligá-lo
-        if (msgId && chatwootAdapter.isBotMessage(msgId)) {
-          console.log(`[Chatwoot Webhook] Mensagem #${msgId} enviada pelo próprio bot. Bot mantido.`);
-        } else {
-          // Atendente humano enviou mensagem: desligamento atômico
-          agentBotService.deactivateBotForConversation(convId, 'AGENT_SENT_MESSAGE_WEBHOOK');
-        }
-      } else if (convId && isIncoming) {
-        // Mensagem recebida do cliente (WhatsApp, Instagram ou Messenger)
-        const inboxObj = (event as any).inbox || (event as any).conversation?.inbox;
-        const currentInboxId = (event as any).inbox_id || (event as any).conversation?.inbox_id || inboxObj?.id || 1;
-        const channelTypeStr = (inboxObj?.channel_type || (event as any).conversation?.channel || '').toLowerCase();
-        const inboxNameStr = (inboxObj?.name || '').toLowerCase();
-
-        let detectedChannel = 'whatsapp';
-        if (currentInboxId === 2 || channelTypeStr.includes('instagram') || inboxNameStr.includes('instagram')) {
-          detectedChannel = 'instagram';
-        } else if (currentInboxId === 3 || channelTypeStr.includes('facebook') || inboxNameStr.includes('messenger') || inboxNameStr.includes('facebook')) {
-          detectedChannel = 'messenger';
-        }
-
-        // 0. Auto-cadastro silencioso de cliente no Supabase CRM com suporte Omnichannel
-        const senderObj = (event as any).sender || (event as any).conversation?.meta?.sender;
-        const senderPhone = senderObj?.phone_number || '';
-        const defaultName = detectedChannel === 'instagram' ? 'Cliente Instagram' : (detectedChannel === 'messenger' ? 'Cliente Messenger' : 'Cliente WhatsApp');
-        const senderName = senderObj?.name || defaultName;
-        const cleanPhone = senderPhone.replace(/\D/g, '');
-
-        if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
-          (async () => {
-            try {
-              let existingCustomer: any = null;
-              if (cleanPhone) {
-                const r = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customers?phone=eq.${cleanPhone}&organization_id=eq.11111111-1111-1111-1111-111111111111&select=id`, {
-                  headers: { 'apikey': CONFIG.SUPABASE_SECRET_KEY, 'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}` },
-                });
-                const d = await r.json();
-                if (Array.isArray(d) && d.length > 0) existingCustomer = d[0];
-              }
-
-              if (!existingCustomer) {
-                const createRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customers`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'apikey': CONFIG.SUPABASE_SECRET_KEY,
-                    'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
-                    'Prefer': 'return=representation',
-                  },
-                  body: JSON.stringify({
-                    organization_id: '11111111-1111-1111-1111-111111111111',
-                    name: senderName,
-                    phone: cleanPhone || null,
-                  }),
-                });
-                const createdCust = await createRes.json();
-                if (Array.isArray(createdCust) && createdCust[0]?.id) {
-                  existingCustomer = createdCust[0];
-                  console.log(`[Supabase CRM] Cliente salvo (${detectedChannel}): ${senderName}`);
-                }
-              }
-
-              if (existingCustomer?.id) {
-                const extId = cleanPhone || String(senderObj?.id || `conv_${convId}`);
-                await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customer_channels`, {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'apikey': CONFIG.SUPABASE_SECRET_KEY,
-                    'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
-                    'Prefer': 'return=minimal',
-                  },
-                  body: JSON.stringify({
-                    customer_id: existingCustomer.id,
-                    channel_type: detectedChannel === 'messenger' ? 'facebook' : detectedChannel,
-                    external_id: extId,
-                  }),
-                }).catch(() => {});
-              }
-            } catch (err) {
-              console.warn('[Supabase CRM] Erro ao sincronizar cliente omnichannel:', err);
-            }
-          })();
-        }
-
-        // 1. Extração silenciosa de dados comerciais para a Dashboard App
-        if (event.content) {
-          silentExtractionService.extractFromText(
-            '11111111-1111-1111-1111-111111111111',
-            convId,
-            msgId || 1,
-            event.content
-          );
-        }
-
-        // 2. Disparo do Bot de Triagem (se bot estiver ativo para essa conversa)
-        const currentState = agentBotService.getConversationState(convId);
-        console.log(`[Chatwoot Webhook] Estado do bot na conversa #${convId} (${detectedChannel}): ${currentState}`);
-
-        if (currentState === 'BOT_ACTIVE') {
-          const fakeMsg = {
-            id: msgId || Date.now(),
-            inbox_id: currentInboxId,
-            conversation_id: convId,
-            message_type: 'incoming' as const,
-            content: event.content || '',
-            content_type: 'text',
-            created_at: Math.floor(Date.now() / 1000),
-            private: false,
-            attachments: event.attachments as any,
-          };
-          const fakeConv = {
-            id: convId,
-            account_id: 1,
-            status: 'pending' as const,
-            inbox_id: currentInboxId,
-          };
-          const decision = await agentBotService.handleIncomingMessage(fakeConv, fakeMsg);
-          console.log(`[Chatwoot Webhook] Decisão da triagem #${convId} (${detectedChannel}):`, decision);
-
-          if (decision.transition_to_human && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
-            try {
-              await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/audit_events`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'apikey': CONFIG.SUPABASE_SECRET_KEY,
-                  'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
-                  'Prefer': 'return=minimal',
-                },
-                body: JSON.stringify({
-                  organization_id: '11111111-1111-1111-1111-111111111111',
-                  actor_email: 'bot.triagem@multifarma.com',
-                  action: 'BOT_HANDOFF_TO_HUMAN',
-                  entity_type: 'conversation',
-                  entity_id: String(convId),
-                  metadata: {
-                    conversation_id: convId,
-                    intent: decision.intent_detected,
-                    reason: decision.reason,
-                    extracted_product: decision.extracted_product_name,
-                  },
-                }),
-              });
-              console.log(`[Supabase Audit] Evento de handoff gravado com sucesso para conv #${convId}`);
-            } catch (auditErr) {
-              console.warn('[Supabase Audit] Falha ao registrar evento de handoff:', auditErr);
-            }
-          }
-        }
-      }
-    }
-
-    // Se um atendente humano foi atribuído à conversa
-    if (event.event === 'conversation_updated' || event.event === 'conversation_status_changed') {
-      if (convId && event.conversation?.assignee_id) {
-        agentBotService.deactivateBotForConversation(convId, 'AGENT_ASSIGNED_TO_CONVERSATION');
-      }
-    }
-
-    idempotencyService.markCompleted(idempotencyKey, { processed: true, event: event.event });
-    return res.status(200).json({ status: 'SUCCESS', event: event.event });
-  } catch (err) {
-    console.error('[Chatwoot Webhook Endpoint] Erro no processamento:', err);
-    return res.status(500).json({
-      error: 'INTERNAL_ERROR',
-      message: (err as Error).message,
-    });
-  }
-});
-
-// 4. Endpoint para o Painel Lateral (Dashboard App) consultar sugestões extraídas
-app.get('/api/conversations/:id/suggestions', async (req: Request, res: Response) => {
-  const convId = parseInt(req.params.id || '0', 10);
-  let suggestions = silentExtractionService.getSuggestionsForConversation(convId);
-
-  // Se a lista em memória estiver vazia (ex: container acabou de reiniciar), consulta histórico no Chatwoot
-  if (suggestions.length === 0 && convId > 0 && CONFIG.CHATWOOT_API_TOKEN) {
-    try {
-      const chatwootRes = await fetch(
-        `${CONFIG.CHATWOOT_BASE_URL}/api/v1/accounts/${CONFIG.CHATWOOT_ACCOUNT_ID}/conversations/${convId}/messages`,
-        {
-          headers: { api_access_token: CONFIG.CHATWOOT_API_TOKEN },
-        }
-      );
-      if (chatwootRes.ok) {
-        const data = (await chatwootRes.json()) as {
-          payload?: Array<{ id: number; content: string; message_type: number }>;
-        };
-        if (data?.payload && Array.isArray(data.payload)) {
-          for (const m of data.payload) {
-            if (m.content && (m.message_type === 0 || (m as any).message_type === 'incoming')) {
-              silentExtractionService.extractFromText(
-                '11111111-1111-1111-1111-111111111111',
-                convId,
-                m.id,
-                m.content
-              );
-            }
-          }
-          suggestions = silentExtractionService.getSuggestionsForConversation(convId);
-        }
-      }
-    } catch (err) {
-      console.warn(`[Suggestions Endpoint] Aviso: consulta ao Chatwoot falhou para conv #${convId}:`, err);
-    }
-  }
-
-  res.status(200).json({ suggestions });
-});
-
-// 5. Endpoints para Assumir Atendimento e Obter Status da Conversa
-app.get('/api/conversations/:id/claim', async (req: Request, res: Response) => {
-  const convId = parseInt(req.params.id || '0', 10);
-  if (!convId) {
-    return res.status(400).json({ error: 'INVALID_CONVERSATION_ID' });
-  }
-
-  try {
-    let labels: string[] = [];
-    if (CONFIG.CHATWOOT_API_TOKEN) {
-      const chatwootRes = await fetch(
-        `${CONFIG.CHATWOOT_BASE_URL}/api/v1/accounts/${CONFIG.CHATWOOT_ACCOUNT_ID}/conversations/${convId}/labels`,
-        { headers: { api_access_token: CONFIG.CHATWOOT_API_TOKEN } }
-      );
-      if (chatwootRes.ok) {
-        const data = (await chatwootRes.json()) as { payload?: string[] };
-        labels = data?.payload || [];
-      }
-    }
-
-    const claimedLabel = labels.find((l) => l.startsWith('atendido-por:'));
-    const branchLabel = labels.find((l) => l.startsWith('unidade:'));
-
-    if (claimedLabel) {
-      const agentRaw = claimedLabel.replace('atendido-por:', '').replace(/-/g, ' ');
-      const branchRaw = branchLabel ? branchLabel.replace('unidade:', '').replace(/-/g, ' ') : 'Matriz Centro';
-
-      return res.status(200).json({
-        is_claimed: true,
-        claimed_by: agentRaw.charAt(0).toUpperCase() + agentRaw.slice(1),
-        branch: branchRaw.charAt(0).toUpperCase() + branchRaw.slice(1),
-        labels,
-      });
-    }
-
-    return res.status(200).json({
-      is_claimed: false,
-      labels,
-    });
-  } catch (err: any) {
-    return res.status(200).json({ is_claimed: false, error: err.message });
-  }
-});
-
-app.post('/api/conversations/:id/claim', async (req: Request, res: Response) => {
-  const convId = parseInt(req.params.id || '0', 10);
-  if (!convId) {
-    return res.status(400).json({ error: 'INVALID_CONVERSATION_ID' });
-  }
-
-  try {
-    const { agent_name, branch_name } = req.body || {};
-    const agent = agent_name || 'Ana Souza';
-    const branch = branch_name || 'Unidade Guaratinguetá';
-
-    const cleanAgentSlug = agent.toLowerCase().replace(/[^a-z0-9]/g, '-');
-    const cleanBranchSlug = branch.toLowerCase().replace(/[^a-z0-9]/g, '-');
-
-    // Desativa o bot atomicamente para esta conversa
-    agentBotService.deactivateBotForConversation(convId, `AGENT_CLAIMED_BY_${cleanAgentSlug.toUpperCase()}`);
-
-    // Adiciona etiquetas no Chatwoot
-    await chatwootAdapter.addLabels(convId, [
-      'em-atendimento',
-      `atendido-por:${cleanAgentSlug}`,
-      `unidade:${cleanBranchSlug}`,
-    ]);
-
-    // Registra evento de auditoria no Supabase
-    if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
-      try {
-        await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/audit_events`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'apikey': CONFIG.SUPABASE_SECRET_KEY,
-            'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
-            'Prefer': 'return=minimal',
-          },
-          body: JSON.stringify({
-            organization_id: '11111111-1111-1111-1111-111111111111',
-            actor_email: `${cleanAgentSlug}@multifarma.com`,
-            action: 'AGENT_CLAIMED_CONVERSATION',
-            entity_type: 'conversation',
-            entity_id: String(convId),
-            metadata: {
-              conversation_id: convId,
-              agent_name: agent,
-              branch_name: branch,
-              claimed_at: new Date().toISOString(),
-            },
-          }),
-        });
-      } catch (auditErr) {
-        console.warn('[Claim Audit] Erro ao gravar auditoria:', auditErr);
-      }
-    }
-
-    console.log(`[Claim Conversation] Atendimento da conv #${convId} assumido por ${agent} (${branch})`);
-
-    return res.status(200).json({
-      success: true,
-      is_claimed: true,
-      claimed_by: agent,
-      branch: branch,
-      claimed_at: new Date().toISOString(),
-    });
-  } catch (err: any) {
-    console.error('[Claim Endpoint] Erro ao assumir conversa:', err);
-    return res.status(500).json({ error: 'FAILED_TO_CLAIM', message: err.message });
-  }
-});
-
-if (process.env.NODE_ENV !== 'test') {
-  app.listen(CONFIG.PORT, () => {
-    console.log(`[Integration Service] Executando na porta ${CONFIG.PORT} (modo mock: ${CONFIG.MOCK_MODE})`);
-  });
+  if (!response.ok) throw new Error("PERSISTENCE_FAILED");
+  return response.status === 204 ? null : response.json();
 }
+app.get("/internal/health", (req, res) => {
+  if (!validInternalToken(req.header("authorization"), CONFIG.INTERNAL_TOKEN))
+    return res.status(401).json({ error: "UNAUTHENTICATED" });
+  return res.json({
+    status: "process_running",
+    service: "MultiFarma Integration Hub",
+    channels: "not_checked",
+  });
+});
+// Browser operations are served only by the authenticated Next handlers.
+app.all("/api/*", (_req, res) =>
+  res.status(410).json({ error: "USE_AUTHENTICATED_HUB_API" }),
+);
+async function webhook(req: Request, res: Response) {
+  if(CONFIG.MOCK_MODE && CONFIG.NODE_ENV!=="test") return res.status(503).json({error:"MOCK_MODE_RESTRICTED_TO_TESTS"});
+  if (CONFIG.WEBHOOK_SECRET.length < 32)
+    return res.status(503).json({ error: "WEBHOOK_CONFIGURATION_REQUIRED" });
+  const raw = (req as Request & { rawBody: Buffer }).rawBody;
+  if (
+    !raw ||
+    !validSignature(
+      raw,
+      req.header("x-hub-timestamp"),
+      req.header("x-hub-signature"),
+      CONFIG.WEBHOOK_SECRET,
+    )
+  )
+    return res.status(401).json({ error: "INVALID_SIGNATURE" });
+  if (!req.body || typeof req.body !== "object" || Array.isArray(req.body))
+    return res.status(400).json({ error: "INVALID_EVENT" });
+  const body = req.body,
+    conv =
+      body?.conversation ||
+      (String(body?.event || "").startsWith("conversation_") ? body : null);
+  const msg = body?.message || body;
+  if (
+    (msg.attachments != null &&
+      (!Array.isArray(msg.attachments) ||
+        msg.attachments.some(
+          (a: unknown) => !a || typeof a !== "object" || Array.isArray(a),
+        ))) ||
+    (msg.content != null && typeof msg.content !== "string")
+  )
+    return res.status(400).json({ error: "INVALID_MESSAGE" });
+  const account = body?.account?.id ?? conv?.account_id;
+  if (
+    !Number.isSafeInteger(account) ||
+    account !== CONFIG.CHATWOOT_ACCOUNT_ID ||
+    (conv?.account_id != null && conv.account_id !== account)
+  )
+    return res.status(403).json({ error: "ACCOUNT_DENIED" });
+  const inbox = conv?.inbox_id ?? body?.inbox?.id;
+  if (
+    !Number.isSafeInteger(inbox) ||
+    inbox <= 0 ||
+    (body.inbox?.id != null && body.inbox.id !== inbox) ||
+    (msg.inbox_id != null && msg.inbox_id !== inbox)
+  )
+    return res.status(403).json({ error: "INBOX_DENIED" });
+  let mapping: any;
+  try {
+    mapping = JSON.parse(CONFIG.INBOX_MAP)[String(inbox)];
+  } catch {
+    return res.status(503).json({ error: "INBOX_CONFIGURATION_REQUIRED" });
+  }
+  if (
+    !mapping ||
+    !/^[a-f0-9-]{36}$/i.test(mapping.organization_id || "") ||
+    !/^[a-f0-9-]{36}$/i.test(mapping.branch_id || "") ||
+    !["whatsapp", "instagram", "facebook"].includes(mapping.channel)
+  )
+    return res.status(403).json({ error: "INBOX_DENIED" });
+  if (!Number.isSafeInteger(conv?.id) || conv.id <= 0)
+    return res.status(400).json({ error: "INVALID_CONVERSATION" });
+  const event = body.event;
+  if (
+    ![
+      "message_created",
+      "conversation_updated",
+      "conversation_status_changed",
+      "conversation_created",
+    ].includes(event)
+  )
+    return res.status(400).json({ error: "UNSUPPORTED_EVENT" });
+  const isMessage = event === "message_created";
+  if (isMessage && !/^[1-9]\d*$/.test(String(msg.id || "")))
+    return res.status(400).json({ error: "STABLE_EVENT_ID_REQUIRED" });
+  const revision = body.updated_at ?? conv.updated_at;
+  if (
+    !isMessage &&
+    ((typeof revision !== "number" && typeof revision !== "string") ||
+      !Number.isFinite(
+        new Date(
+          typeof revision === "number" ? revision * 1000 : revision,
+        ).getTime(),
+      ))
+  )
+    return res.status(400).json({ error: "STABLE_REVISION_REQUIRED" });
+  const incoming =
+    isMessage &&
+    (msg.message_type === 0 || msg.message_type === "incoming") &&
+    !msg.private;
+  const sender = msg.sender || conv.meta?.sender;
+  const assignee = conv.assignee_id ?? conv.meta?.assignee?.id ?? null;
+  const human =
+    !!assignee ||
+    msg.private === true ||
+    (isMessage &&
+      !incoming &&
+      msg.sender_type !== "AgentBot" &&
+      sender?.type !== "agent_bot");
+  const identity = {
+    account,
+    conversation: conv.id,
+    inbox,
+    event,
+    id: isMessage ? String(msg.id) : String(revision),
+  };
+  const key = eventDigest(identity);
+  // Exclude changing conversation metadata from immutable message fingerprint.
+  const hash = eventDigest(
+    isMessage
+      ? {
+          ...identity,
+          content: msg.content ?? null,
+          type: msg.message_type,
+          private: !!msg.private,
+          sender: sender?.id ?? null,
+          attachments: (msg.attachments || []).map((a: any) => a.id),
+        }
+      : { ...identity, changed: body.changed_attributes ?? null },
+  );
+  let reserved = false;
+  try {
+    const state = await rpc("reserve_webhook", { p_key: key, p_hash: hash });
+    if (state === "completed") return res.json({ status: "DUPLICATE_IGNORED" });
+    if (state !== "acquired")
+      return res.status(409).json({
+        error:
+          state === "conflict"
+            ? "EVENT_CONFLICT"
+            : "EVENT_RECONCILIATION_REQUIRED",
+      });
+    reserved = true;
+    const context = await rpc("sync_webhook", {
+      p_org: mapping.organization_id,
+      p_branch: mapping.branch_id,
+      p_account: account,
+      p_conv: conv.id,
+      p_channel: mapping.channel,
+      p_contact: incoming && sender?.id != null ? String(sender.id) : null,
+      p_name: incoming ? (sender?.name ?? null) : null,
+      p_phone: incoming ? (sender?.phone_number ?? null) : null,
+      p_human: human,
+      p_key: incoming ? key : null,
+      p_assignee: assignee,
+    });
+    if (
+      incoming &&
+      context.bot_active &&
+      !context.assigned_user_id &&
+      !context.chatwoot_assignee_id
+    ) {
+      agentBotService.setConversationState(conv.id, "BOT_ACTIVE");
+      const decision = await agentBotService.handleIncomingMessage(
+        { ...conv, account_id: account },
+        { ...msg, conversation_id: conv.id },
+      );
+      await rpc("finish_bot_turn", {
+        p_org: mapping.organization_id,
+        p_conv: conv.id,
+        p_key: key,
+        p_handoff: decision.transition_to_human,
+      });
+    } else if (human)
+      agentBotService.deactivateBotForConversation(conv.id, "VERIFIED_WEBHOOK");
+    await rpc("finish_webhook", { p_key: key, p_state: "completed" });
+    return res.json({ status: "PROCESSED" });
+  } catch {
+    if (reserved) {
+      try {
+        await rpc("finish_webhook", { p_key: key, p_state: "uncertain" });
+      } catch {}
+    }
+    return res.status(503).json({ error: "EVENT_NOT_COMPLETED" });
+  }
+}
+app.post("/internal/chatwoot/webhook", webhook);
+app.post("/internal/chatwoot/agent-bot", webhook);
+app.use((_error: unknown, _req: Request, res: Response, _next: unknown) =>
+  res.status(400).json({ error: "INVALID_REQUEST_BODY" }),
+);
+if (process.env.NODE_ENV !== "test")
+  app.listen(CONFIG.PORT, () => console.log("Integration service started"));

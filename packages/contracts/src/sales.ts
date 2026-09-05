@@ -1,13 +1,13 @@
-import { z } from 'zod';
-import { ChannelTypeSchema } from './chatwoot';
+import { z } from "zod";
+import { ChannelTypeSchema } from "./chatwoot";
 
-export const SaleStatusSchema = z.enum(['draft', 'confirmed', 'cancelled']);
+export const SaleStatusSchema = z.enum(["draft", "confirmed", "cancelled"]);
 export type SaleStatus = z.infer<typeof SaleStatusSchema>;
 
-export const FulfillmentMethodSchema = z.enum(['delivery', 'pickup']);
+export const FulfillmentMethodSchema = z.enum(["delivery", "pickup"]);
 export type FulfillmentMethod = z.infer<typeof FulfillmentMethodSchema>;
 
-export const SaleOriginTypeSchema = z.enum(['manual', 'ai_suggested']);
+export const SaleOriginTypeSchema = z.enum(["manual", "ai_suggested"]);
 export type SaleOriginType = z.infer<typeof SaleOriginTypeSchema>;
 
 export const ProductSchema = z.object({
@@ -54,14 +54,46 @@ export const CreateSaleInputSchema = z.object({
   customer_phone: z.string().optional(),
   items: z.array(CreateSaleItemInputSchema).min(1),
   discount: z.number().nonnegative().default(0),
-  fulfillment_method: FulfillmentMethodSchema.default('delivery'),
-  origin_type: SaleOriginTypeSchema.default('manual'),
+  fulfillment_method: FulfillmentMethodSchema.default("delivery"),
+  origin_type: SaleOriginTypeSchema.default("manual"),
   delivery_address: z.string().optional(),
   notes: z.string().optional(),
   agent_id: z.string().optional(),
   agent_name: z.string().optional(),
 });
 export type CreateSaleInput = z.infer<typeof CreateSaleInputSchema>;
+
+export const NoSaleReasonSchema = z.enum([
+  "price",
+  "product_unavailable",
+  "delivery_unavailable",
+  "customer_gave_up",
+  "no_response",
+  "other",
+]);
+export type NoSaleReason = z.infer<typeof NoSaleReasonSchema>;
+
+const ConversationClosureContextSchema = z.object({
+  organization_id: z.string().uuid(),
+  branch_id: z.string().uuid(),
+  chatwoot_conversation_id: z.number().int().positive(),
+  channel: ChannelTypeSchema,
+});
+
+export const CloseConversationInputSchema = z.discriminatedUnion("outcome", [
+  CreateSaleInputSchema.extend({ outcome: z.literal("sale") }),
+  ConversationClosureContextSchema.extend({
+    outcome: z.literal("not_sold"),
+    reason: NoSaleReasonSchema,
+  }),
+  ConversationClosureContextSchema.extend({ outcome: z.literal("resolved") }),
+  ConversationClosureContextSchema.extend({
+    outcome: z.literal("cancelled"),
+  }),
+]);
+export type CloseConversationInput = z.infer<
+  typeof CloseConversationInputSchema
+>;
 
 export const ConfirmSaleInputSchema = z.object({
   sale_id: z.string().uuid(),
@@ -104,26 +136,32 @@ export const DashboardKPIsSchema = z.object({
   total_revenue: z.number().nonnegative(),
   confirmed_sales_count: z.number().int().nonnegative(),
   average_ticket: z.number().nonnegative(),
-  conversion_rate: z.number().min(0).max(100),
-  total_conversations: z.number().int().nonnegative(),
+  conversion_rate: z.number().min(0).max(100).nullable(),
+  total_conversations: z.number().int().nonnegative().nullable(),
   sales_by_channel: z.record(z.number()),
-  sales_by_branch: z.array(z.object({
-    branch_id: z.string(),
-    branch_name: z.string(),
-    total_revenue: z.number(),
-    sales_count: z.number(),
-  })),
-  sales_by_agent: z.array(z.object({
-    agent_id: z.string(),
-    agent_name: z.string(),
-    total_revenue: z.number(),
-    sales_count: z.number(),
-  })),
-  top_products: z.array(z.object({
-    product_name: z.string(),
-    quantity: z.number(),
-    total_revenue: z.number(),
-  })),
+  sales_by_branch: z.array(
+    z.object({
+      branch_id: z.string(),
+      branch_name: z.string(),
+      total_revenue: z.number(),
+      sales_count: z.number(),
+    }),
+  ),
+  sales_by_agent: z.array(
+    z.object({
+      agent_id: z.string(),
+      agent_name: z.string(),
+      total_revenue: z.number(),
+      sales_count: z.number(),
+    }),
+  ),
+  top_products: z.array(
+    z.object({
+      product_name: z.string(),
+      quantity: z.number(),
+      total_revenue: z.number(),
+    }),
+  ),
   delivery_vs_pickup: z.object({
     delivery_count: z.number(),
     pickup_count: z.number(),

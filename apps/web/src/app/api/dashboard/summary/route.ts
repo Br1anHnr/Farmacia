@@ -1,65 +1,79 @@
-import { NextResponse, type NextRequest } from 'next/server';
-import { AUTH_COOKIE_NAME, canAccessDashboard } from '@/lib/auth-store';
-import { type DashboardKPIs } from '@hub-farmacia/contracts';
-import { supabaseRest } from '@/lib/supabase';
+import { NextResponse, type NextRequest } from "next/server";
+import { authorize } from "@/lib/server-auth";
+import { type DashboardKPIs } from "@hub-farmacia/contracts";
+import { supabaseRest } from "@/lib/supabase";
 
 export async function GET(request: NextRequest) {
-  // Verificação de autorização em nível de API
-  const roleFromHeader = request.headers.get('x-user-role');
-  const roleFromCookie = request.cookies.get(AUTH_COOKIE_NAME)?.value;
-  const currentRole = roleFromHeader || roleFromCookie || 'agent';
-
-  // REGRA CRÍTICA DE ACESSO: Atendente e não-gerente recebem 403 Forbidden
-  if (!canAccessDashboard(currentRole)) {
+  const auth = await authorize(request, true);
+  if ("response" in auth) return auth.response;
+  const { organizationId, branchIds } = auth.context;
+  const search = request.nextUrl.searchParams;
+  const period = search.get("period") || "all";
+  const channel = search.get("channel") || "all";
+  const branch = search.get("branch") || "all";
+  if (
+    !["all", "today", "7d", "30d"].includes(period) ||
+    !["all", "whatsapp", "instagram", "facebook", "messenger"].includes(channel)
+  )
+    return NextResponse.json({ error: "INVALID_FILTER" }, { status: 400 });
+  if (branch !== "all" && !branchIds.includes(branch))
     return NextResponse.json(
-      {
-        error: 'ACCESS_DENIED_MANAGER_ONLY',
-        message: 'Acesso negado: O papel agent não possui permissão para consultar dados comerciais agregados.',
-        attempted_role: currentRole,
-      },
-      { status: 403 }
+      { error: "BRANCH_ACCESS_DENIED" },
+      { status: 403 },
     );
+  const filters: Record<string, string> = {};
+  if (channel !== "all")
+    filters.channel =
+      channel === "facebook" || channel === "messenger"
+        ? "in.(facebook,messenger)"
+        : "eq." + channel;
+  if (period !== "all") {
+    const now = new Date();
+    const start =
+      period === "today"
+        ? new Date(
+            new Intl.DateTimeFormat("en-CA", {
+              timeZone: "America/Sao_Paulo",
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+            }).format(now) + "T00:00:00-03:00",
+          )
+        : new Date(now.getTime() - (period === "7d" ? 7 : 30) * 86400000);
+    filters.confirmed_at = "gte." + start.toISOString();
   }
-
-  // Busca vendas reais do banco Supabase
-  let sales: any[] = [];
-  try {
-    const res = await supabaseRest<any[]>('sales', {
-      params: {
-        select: 'id,total_amount,status,channel,branch_id,agent_id,fulfillment_method,created_at,confirmed_at,sale_items(product_name_snapshot,quantity,total_item_price)',
-        order: 'confirmed_at.desc',
-      },
-    });
-    if (res.data && Array.isArray(res.data)) {
-      sales = res.data.filter((s) => s.status === 'confirmed');
-    }
-  } catch (err) {
-    console.warn('[Dashboard Summary] Falha ao consultar Supabase, usando cálculo local:', err);
-  }
-
-  // Se não houver vendas gravadas ainda, inicializa com a venda demonstrativa do seed
-  if (sales.length === 0) {
-    sales = [
-      {
-        id: '66666666-6666-6666-6666-666666666661',
-        total_amount: 29.00,
-        channel: 'whatsapp',
-        branch_id: '22222222-2222-2222-2222-222222222221',
-        agent_id: '33333333-3333-3333-3333-333333333332',
-        fulfillment_method: 'delivery',
-        sale_items: [
-          { product_name_snapshot: 'Dipirona 500mg 20 comp', quantity: 1, total_item_price: 8.50 },
-          { product_name_snapshot: 'Dorflex 36 comprimidos', quantity: 1, total_item_price: 22.50 },
-        ],
-      },
-    ];
-  }
-
+  const res = await supabaseRest<any[]>("sales", {
+    accessToken: auth.context.accessToken,
+    headers: { Prefer: "return=representation,count=exact" },
+    params: {
+      organization_id: "eq." + organizationId,
+      branch_id:
+        branch === "all" ? "in.(" + branchIds.join(",") + ")" : "eq." + branch,
+      ...filters,
+      status: "eq.confirmed",
+      select:
+        "id,total_amount,status,channel,branch_id,agent_id,fulfillment_method,confirmed_at,sale_items(product_name_snapshot,quantity,total_item_price)",
+      order: "confirmed_at.desc",
+    },
+  });
+  if (res.error || !Array.isArray(res.data))
+    return NextResponse.json({ error: "DATA_UNAVAILABLE" }, { status: 503 });
+  // Avoid silently reporting truncated PostgREST aggregates as complete totals.
+  if (res.totalCount === undefined || res.totalCount !== res.data.length)
+    return NextResponse.json(
+      { error: "AGGREGATION_REQUIRED" },
+      { status: 503 },
+    );
+  const sales = res.data;
   const confirmedSalesCount = sales.length;
-  const totalRevenue = sales.reduce((acc, s) => acc + (parseFloat(s.total_amount) || 0), 0);
-  const averageTicket = confirmedSalesCount > 0 ? totalRevenue / confirmedSalesCount : 0;
-  const totalConversations = Math.max(confirmedSalesCount + 2, 5);
-  const conversionRate = Math.round((confirmedSalesCount / totalConversations) * 1000) / 10;
+  const totalRevenue = sales.reduce(
+    (acc, s) => acc + (parseFloat(s.total_amount) || 0),
+    0,
+  );
+  const averageTicket =
+    confirmedSalesCount > 0 ? totalRevenue / confirmedSalesCount : 0;
+  const totalConversations = null;
+  const conversionRate = null;
 
   const salesByChannel: Record<string, number> = {
     whatsapp: 0,
@@ -67,16 +81,15 @@ export async function GET(request: NextRequest) {
     messenger: 0,
   };
 
-  const branchMap: Record<string, { total: number; count: number; name: string }> = {
-    '22222222-2222-2222-2222-222222222221': { total: 0, count: 0, name: 'MultiFarma Matriz Centro' },
-    '22222222-2222-2222-2222-222222222222': { total: 0, count: 0, name: 'MultiFarma Filial Jardins' },
-  };
+  const branchMap: Record<
+    string,
+    { total: number; count: number; name: string }
+  > = {};
 
-  const agentMap: Record<string, { total: number; count: number; name: string }> = {
-    '33333333-3333-3333-3333-333333333332': { total: 0, count: 0, name: 'Ana Souza' },
-    '33333333-3333-3333-3333-333333333333': { total: 0, count: 0, name: 'Bruno Lima' },
-    '33333333-3333-3333-3333-333333333331': { total: 0, count: 0, name: 'Carlos Mendes' },
-  };
+  const agentMap: Record<
+    string,
+    { total: number; count: number; name: string }
+  > = {};
 
   const productMap: Record<string, { qty: number; revenue: number }> = {};
   let deliveryCount = 0;
@@ -84,34 +97,35 @@ export async function GET(request: NextRequest) {
 
   sales.forEach((s) => {
     const val = parseFloat(s.total_amount) || 0;
-    const ch = (s.channel || 'whatsapp').toLowerCase();
-    if (ch.includes('whats')) salesByChannel.whatsapp += val;
-    else if (ch.includes('insta')) salesByChannel.instagram += val;
-    else salesByChannel.messenger += val;
+    const ch = (s.channel || "").toLowerCase();
+    if (ch.includes("whats")) salesByChannel.whatsapp += val;
+    else if (ch.includes("insta")) salesByChannel.instagram += val;
+    else if (ch === "messenger" || ch === "facebook")
+      salesByChannel.messenger += val;
 
-    const bId = s.branch_id || '22222222-2222-2222-2222-222222222221';
+    const bId = s.branch_id || "unknown";
     if (!branchMap[bId]) {
-      branchMap[bId] = { total: 0, count: 0, name: 'Filial MultiFarma' };
+      branchMap[bId] = { total: 0, count: 0, name: "Unidade " + bId };
     }
     branchMap[bId].total += val;
     branchMap[bId].count += 1;
 
-    const aId = s.agent_id || '33333333-3333-3333-3333-333333333332';
+    const aId = s.agent_id || "unknown";
     if (!agentMap[aId]) {
-      agentMap[aId] = { total: 0, count: 0, name: 'Atendente' };
+      agentMap[aId] = { total: 0, count: 0, name: "Colaborador " + aId };
     }
     agentMap[aId].total += val;
     agentMap[aId].count += 1;
 
-    if (s.fulfillment_method === 'pickup') {
+    if (s.fulfillment_method === "pickup") {
       pickupCount += 1;
-    } else {
+    } else if (s.fulfillment_method === "delivery") {
       deliveryCount += 1;
     }
 
     if (Array.isArray(s.sale_items)) {
       s.sale_items.forEach((item: any) => {
-        const pName = item.product_name_snapshot || 'Medicamento';
+        const pName = item.product_name_snapshot || "Medicamento";
         const pQty = parseFloat(item.quantity) || 1;
         const pPrice = parseFloat(item.total_item_price) || 0;
         if (!productMap[pName]) {
@@ -155,9 +169,7 @@ export async function GET(request: NextRequest) {
       total_revenue: Math.round(a.total * 100) / 100,
       sales_count: a.count,
     })),
-    top_products: topProducts.length > 0 ? topProducts : [
-      { product_name: 'Dipirona 500mg 20 comp', quantity: 1, total_revenue: 8.50 },
-    ],
+    top_products: topProducts,
     delivery_vs_pickup: {
       delivery_count: deliveryCount,
       pickup_count: pickupCount,

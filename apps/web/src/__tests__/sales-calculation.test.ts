@@ -1,62 +1,87 @@
-import { describe, it, expect } from 'vitest';
-import { POST } from '../app/api/sales/route';
-import { NextRequest } from 'next/server';
-
-describe('Registro Estruturado e Confirmação de Vendas', () => {
-  it('deve calcular subtotal e total com precisão financeira sem ponto flutuante irregular', async () => {
-    const salePayload = {
-      organization_id: '11111111-1111-1111-1111-111111111111',
-      branch_id: '22222222-2222-2222-2222-222222222221',
-      chatwoot_conversation_id: 101,
-      channel: 'whatsapp',
-      customer_name: 'Maria de Souza',
-      customer_phone: '+5511977776666',
-      items: [
-        { product_name: 'Dipirona 500mg 20 comp', unit_price: 8.50, quantity: 2 },
-        { product_name: 'Dorflex 36 comprimidos', unit_price: 22.50, quantity: 1 },
-      ],
-      discount: 4.50,
-      fulfillment_method: 'delivery',
-      origin_type: 'manual',
-      delivery_address: 'Av. Paulista, 1000 - Bela Vista',
-    };
-
-    const req = new NextRequest('http://localhost:3000/api/sales', {
-      method: 'POST',
-      body: JSON.stringify(salePayload),
-    });
-
-    const res = await POST(req);
-    expect(res.status).toBe(201);
-
-    const data = await res.json();
-    // 2 * 8.50 + 22.50 = 17.00 + 22.50 = 39.50
-    expect(data.subtotal).toBe(39.50);
-    // 39.50 - 4.50 = 35.00
-    expect(data.total_amount).toBe(35.00);
-    expect(data.status).toBe('confirmed');
-    expect(data.items.length).toBe(2);
-    expect(data.confirmed_at).toBeDefined();
+import { describe, it, expect, beforeEach } from "vitest";
+import { POST } from "../app/api/sales/route";
+import { NextRequest } from "next/server";
+import { httpFixture, org, branch, user } from "../../../../tests/support/http";
+let state: ReturnType<typeof httpFixture>;
+beforeEach(() => {
+  state = httpFixture();
+});
+const input = () => ({
+  organization_id: org,
+  branch_id: branch,
+  chatwoot_conversation_id: 101,
+  channel: "whatsapp",
+  customer_name: "Synthetic",
+  items: [
+    { product_name: "A", unit_price: 8.5, quantity: 2 },
+    { product_name: "B", unit_price: 22.5, quantity: 1 },
+  ],
+  discount: 4.5,
+  fulfillment_method: "delivery",
+  origin_type: "manual",
+});
+function req(
+  body: any = input(),
+  key = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+) {
+  return new NextRequest("http://localhost:3000/api/sales", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer verified",
+      "idempotency-key": key,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
-
-  it('deve rejeitar payload de venda sem itens com HTTP 400', async () => {
-    const invalidPayload = {
-      organization_id: '11111111-1111-1111-1111-111111111111',
-      branch_id: '22222222-2222-2222-2222-222222222221',
-      chatwoot_conversation_id: 101,
-      channel: 'whatsapp',
-      customer_name: 'Maria',
-      items: [], // Vazio!
-    };
-
-    const req = new NextRequest('http://localhost:3000/api/sales', {
-      method: 'POST',
-      body: JSON.stringify(invalidPayload),
-    });
-
-    const res = await POST(req);
-    expect(res.status).toBe(400);
-    const body = await res.json();
-    expect(body.error).toBe('INVALID_SALE_INPUT');
+}
+describe("Venda: contrato HTTP; cálculo/rollback exercitados em p0-database.test.ts", () => {
+  it("retorna apenas venda confirmada pela RPC e não aceita autoria do navegador", async () => {
+    const res = await POST(
+      req({ ...input(), agent_id: "forged", agent_name: "forged" }),
+    );
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.subtotal).toBe(39.5);
+    expect(data.total_amount).toBe(35);
+    expect(data.agent_id).toBe(user);
+    const calls = state.calls.filter((c) =>
+      c.url.pathname.endsWith("/record_sale"),
+    );
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0].options.body).p_input.agent_id).toBeUndefined();
+    expect(calls[0].options.headers.Authorization).toBe("Bearer verified");
+  });
+  it("rejeita venda sem itens", async () => {
+    expect((await POST(req({ ...input(), items: [] }))).status).toBe(400);
+  });
+  it("exige chave de idempotência", async () => {
+    expect((await POST(req(input(), ""))).status).toBe(400);
+  });
+  it("não retorna 201 se RPC falhar", async () => {
+    state.fail = "record_sale";
+    expect((await POST(req())).status).toBe(503);
+  });
+  it("não retorna sucesso com resultado sem ID", async () => {
+    state.sale.id = "";
+    expect((await POST(req())).status).toBe(503);
+  });
+  it("nega organização forjada antes da RPC", async () => {
+    expect(
+      (
+        await POST(
+          req({
+            ...input(),
+            organization_id: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+          }),
+        )
+      ).status,
+    ).toBe(403);
+    expect(
+      state.calls.some((c) => c.url.pathname.endsWith("/record_sale")),
+    ).toBe(false);
+  });
+  it("nega administrador técnico", async () => {
+    state.role = "admin";
+    expect((await POST(req())).status).toBe(403);
   });
 });

@@ -1,155 +1,82 @@
-import { NextResponse, type NextRequest } from 'next/server';
-import { supabaseRest } from '@/lib/supabase';
-
-const CHATWOOT_BASE_URL = process.env.CHATWOOT_BASE_URL || 'https://chatwoot.projectvalemind.com';
-const CHATWOOT_API_TOKEN = process.env.CHATWOOT_API_TOKEN || 'ZJ8tc1X45yjCtFygYaUpky4C';
-const CHATWOOT_ACCOUNT_ID = process.env.CHATWOOT_ACCOUNT_ID || '1';
-
+import { NextResponse, type NextRequest } from "next/server";
+import { conversationAccess } from "@/lib/conversation-access";
+import { supabaseRest } from "@/lib/supabase";
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: { id: string } },
 ) {
-  const conversationId = parseInt(params.id, 10);
-  if (!conversationId) {
-    return NextResponse.json({ error: 'INVALID_CONVERSATION_ID' }, { status: 400 });
-  }
-
-  try {
-    // 1. Consulta etiquetas da conversa no Chatwoot
-    const res = await fetch(
-      `${CHATWOOT_BASE_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/conversations/${conversationId}/labels`,
-      {
-        headers: { api_access_token: CHATWOOT_API_TOKEN },
-        cache: 'no-store',
-      }
-    );
-
-    let labels: string[] = [];
-    if (res.ok) {
-      const data = await res.json();
-      labels = data?.payload || [];
-    }
-
-    const claimedLabel = labels.find((l) => l.startsWith('atendido-por:'));
-    const branchLabel = labels.find((l) => l.startsWith('unidade:'));
-
-    if (claimedLabel) {
-      const agentRaw = claimedLabel.replace('atendido-por:', '').replace(/-/g, ' ');
-      const branchRaw = branchLabel ? branchLabel.replace('unidade:', '').replace(/-/g, ' ') : 'Matriz Centro';
-
-      return NextResponse.json({
-        is_claimed: true,
-        claimed_by: agentRaw.charAt(0).toUpperCase() + agentRaw.slice(1),
-        branch: branchRaw.charAt(0).toUpperCase() + branchRaw.slice(1),
-        labels,
-      });
-    }
-
-    return NextResponse.json({
-      is_claimed: false,
-      labels,
-    });
-  } catch (err: any) {
-    return NextResponse.json({ is_claimed: false, error: err.message });
-  }
+  const auth = await conversationAccess(request, params.id);
+  if ("response" in auth) return auth.response;
+  return NextResponse.json({
+    is_claimed:
+      !!auth.conversation.assigned_user_id ||
+      !!auth.conversation.chatwoot_assignee_id,
+    claimed_by: auth.conversation.assigned_user_id,
+    branch: auth.conversation.branch_id,
+  });
 }
-
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: { id: string } },
 ) {
-  const conversationId = parseInt(params.id, 10);
-  if (!conversationId) {
-    return NextResponse.json({ error: 'INVALID_CONVERSATION_ID' }, { status: 400 });
-  }
-
+  const auth = await conversationAccess(request, params.id);
+  if ("response" in auth) return auth.response;
+  const url = process.env.CHATWOOT_BASE_URL,
+    token = process.env.CHATWOOT_API_TOKEN,
+    account = Number(process.env.CHATWOOT_ACCOUNT_ID);
+  if (
+    !url ||
+    !token ||
+    !account ||
+    account !== auth.conversation.chatwoot_account_id
+  )
+    return NextResponse.json(
+      { error: "CHATWOOT_CONFIGURATION_REQUIRED" },
+      { status: 503 },
+    );
+  const claim = await supabaseRest<any>("rpc/claim_conversation", {
+    accessToken: auth.context.accessToken,
+    method: "POST",
+    body: { p_org: auth.context.organizationId, p_conv: Number(params.id) },
+  });
+  if (claim.error || !claim.data?.agent_id)
+    return NextResponse.json(
+      { error: "CLAIM_NOT_PERSISTED" },
+      { status: [403, 409].includes(claim.status) ? claim.status : 503 },
+    );
   try {
-    const body = await request.json();
-    const agentName = body.agent_name || 'Ana Souza';
-    const branchName = body.branch_name || 'Unidade Guaratinguetá';
-
-    const cleanAgentSlug = agentName.toLowerCase().replace(/[^a-z0-9]/g, '-');
-    const cleanBranchSlug = branchName.toLowerCase().replace(/[^a-z0-9]/g, '-');
-
-    // 1. Busca etiquetas existentes para não sobrescrever
-    let existingLabels: string[] = [];
-    try {
-      const getLabelsRes = await fetch(
-        `${CHATWOOT_BASE_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/conversations/${conversationId}/labels`,
-        {
-          headers: { api_access_token: CHATWOOT_API_TOKEN },
-          cache: 'no-store',
-        }
-      );
-      if (getLabelsRes.ok) {
-        const data = await getLabelsRes.json();
-        existingLabels = (data?.payload || []).filter(
-          (l: string) => !l.startsWith('atendido-por:') && !l.startsWith('unidade:') && l !== 'triagem-bot'
-        );
-      }
-    } catch {
-      // continua com array limpo
-    }
-
-    const newLabels = Array.from(
-      new Set([
-        ...existingLabels,
-        'em-atendimento',
-        `atendido-por:${cleanAgentSlug}`,
-        `unidade:${cleanBranchSlug}`,
-      ])
-    );
-
-    // 2. Aplica as novas etiquetas no Chatwoot
-    const labelRes = await fetch(
-      `${CHATWOOT_BASE_URL}/api/v1/accounts/${CHATWOOT_ACCOUNT_ID}/conversations/${conversationId}/labels`,
+    const remote = await fetch(
+      url +
+        "/api/v1/accounts/" +
+        account +
+        "/conversations/" +
+        params.id +
+        "/assignments",
       {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          api_access_token: CHATWOOT_API_TOKEN,
+          "Content-Type": "application/json",
+          api_access_token: token,
         },
-        body: JSON.stringify({ labels: newLabels }),
-      }
-    );
-
-    if (!labelRes.ok) {
-      console.warn('[Claim Conversation] Aviso ao aplicar labels no Chatwoot:', labelRes.status);
-    }
-
-    // 3. Registrar evento de auditoria no Supabase
-    await supabaseRest('audit_events', {
-      method: 'POST',
-      body: {
-        organization_id: '11111111-1111-1111-1111-111111111111',
-        actor_email: `${cleanAgentSlug}@multifarma.com`,
-        action: 'AGENT_CLAIMED_CONVERSATION',
-        entity_type: 'conversation',
-        entity_id: String(conversationId),
-        metadata: {
-          conversation_id: conversationId,
-          agent_name: agentName,
-          branch_name: branchName,
-          claimed_at: new Date().toISOString(),
-        },
+        body: JSON.stringify({ assignee_id: claim.data.agent_id }),
+        signal: AbortSignal.timeout(10000),
       },
-    });
-
-    console.log(`[Claim Conversation] Atendimento da conv #${conversationId} assumido por ${agentName} (${branchName})`);
-
+    );
+    if (!remote.ok)
+      return NextResponse.json(
+        { error: "CHATWOOT_SYNC_PENDING" },
+        { status: 502 },
+      );
     return NextResponse.json({
       success: true,
       is_claimed: true,
-      claimed_by: agentName,
-      branch: branchName,
-      claimed_at: new Date().toISOString(),
-      labels: newLabels,
+      claimed_by: auth.context.fullName,
+      branch: claim.data.branch_id,
     });
-  } catch (err: any) {
-    console.error('[Claim API] Erro ao assumir atendimento:', err);
+  } catch {
     return NextResponse.json(
-      { error: 'FAILED_TO_CLAIM', message: err.message },
-      { status: 500 }
+      { error: "CHATWOOT_SYNC_PENDING" },
+      { status: 502 },
     );
   }
 }

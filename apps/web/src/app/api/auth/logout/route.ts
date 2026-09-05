@@ -1,34 +1,29 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { supabaseAuthLogout } from '@/lib/supabase';
-import { AUTH_COOKIE_NAME } from '@/lib/auth-store';
-
+import { NextRequest, NextResponse } from "next/server";
+import { checkMutationOrigin } from "@/lib/server-auth";
+import { supabaseAuthLogout } from "@/lib/supabase";
 export async function POST(req: NextRequest) {
-  try {
-    const token = req.cookies.get('sb_access_token')?.value;
-
-    if (token) {
-      await supabaseAuthLogout(token);
-    }
-
-    const response = NextResponse.json({
-      success: true,
-      redirectTo: '/login',
-    });
-
-    const expireCookie = {
-      path: '/',
+  const error = checkMutationOrigin(req, true);
+  if (error) return error;
+  const token = req.cookies.get("sb_access_token")?.value;
+  const result = token ? await supabaseAuthLogout(token) : { success: true };
+  const response = NextResponse.json(
+    result.success
+      ? { success: true, redirectTo: "/login" }
+      : { error: "SESSION_REVOCATION_FAILED", success: false },
+    { status: result.success ? 200 : 503 },
+  );
+  for (const name of [
+    "sb_access_token",
+    "sb_refresh_token",
+    "mf_user_role",
+    "mf_user_id",
+  ])
+    response.cookies.set(name, "", {
+      path: "/",
       maxAge: 0,
-      sameSite: 'lax' as const,
-    };
-
-    response.cookies.set('sb_access_token', '', expireCookie);
-    response.cookies.set('sb_refresh_token', '', expireCookie);
-    response.cookies.set(AUTH_COOKIE_NAME, '', expireCookie);
-    response.cookies.set('mf_user_id', '', expireCookie);
-
-    return response;
-  } catch (err) {
-    console.error('[Auth API] Erro ao deslogar:', err);
-    return NextResponse.json({ success: true, redirectTo: '/login' });
-  }
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+    });
+  return response;
 }

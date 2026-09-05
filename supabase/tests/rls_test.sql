@@ -9,16 +9,14 @@ DO $$
 DECLARE
     v_count INTEGER;
 BEGIN
-    SELECT count(*) INTO v_count FROM public.sales;
-    IF v_count > 0 THEN
-        RAISE EXCEPTION 'FALHA DE SEGURANÇA: Usuário anônimo conseguiu visualizar % vendas!', v_count;
-    END IF;
-
-    SELECT count(*) INTO v_count FROM public.audit_events;
-    IF v_count > 0 THEN
-        RAISE EXCEPTION 'FALHA DE SEGURANÇA: Usuário anônimo conseguiu visualizar % eventos de auditoria!', v_count;
-    END IF;
-    
+    BEGIN
+      SELECT count(*) INTO v_count FROM public.sales;
+      IF v_count > 0 THEN RAISE EXCEPTION 'Anon acessou vendas'; END IF;
+    EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+    BEGIN
+      SELECT count(*) INTO v_count FROM public.audit_events;
+      IF v_count > 0 THEN RAISE EXCEPTION 'Anon acessou auditoria'; END IF;
+    EXCEPTION WHEN insufficient_privilege THEN NULL; END;
     RAISE NOTICE 'SUCESSO: Anon bloqueado com 0 registros retornados.';
 END $$;
 

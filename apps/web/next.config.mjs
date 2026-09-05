@@ -5,18 +5,15 @@ const nextConfig = {
     ignoreDuringBuilds: true,
   },
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   async rewrites() {
-    const integrationUrl = process.env.INTEGRATION_SERVICE_URL || 'http://localhost:3001';
+    const integrationUrl =
+      process.env.INTEGRATION_SERVICE_URL || "http://localhost:3001";
     return [
       {
-        source: '/internal/:path*',
+        source: "/internal/:path*",
         destination: `${integrationUrl}/internal/:path*`,
-      },
-      {
-        source: '/api/conversations/:path*',
-        destination: `${integrationUrl}/api/conversations/:path*`,
       },
     ];
   },

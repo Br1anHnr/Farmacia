@@ -5,8 +5,6 @@ Data: 05/09/2026
 Status: base implementada, com correções e homologação pendentes. Não aprovado para produção com dados reais nesta revisão.
 Responsáveis: Brian — produto e gestão; Fábio — segurança, dashboard e interface; Vitor — backend, infraestrutura e integrações.
 
-Atualização de execução: incremento 2 em 05/09/2026 — 121 testes locais e TypeScript aprovados; nenhuma homologação remota. As seções 2–3 preservam o diagnóstico de entrada do anexo; situação atual nas seções 14–15 e no quadro do repositório.
-
 ## 1. Objetivo e limites desta revisão
 
 Evoluir o MVP existente para preservar as funções utilizadas pelo cliente no sistema anterior, atender às solicitações do vídeo e oferecer uma operação simples, identificada com a farmácia e com dados confiáveis.
@@ -189,32 +187,18 @@ Base fixa para os links: commit a9aca040b91bd7b4ba8c383d69c65485798fba58.
 - [Extração atual](https://github.com/Br1anHnr/Farmacia/blob/a9aca040b91bd7b4ba8c383d69c65485798fba58/apps/integration-service/src/services/extraction.ts)
 - [Simulação de fluxo](https://github.com/Br1anHnr/Farmacia/blob/a9aca040b91bd7b4ba8c383d69c65485798fba58/tests/e2e-simulation.test.ts)
 
-## 13. Revisão executada no checkout — 05/09/2026
+## 13. Prompt de execução incremental
 
-Base local: a9aca04. A edição local preexistente foi preservada em `docs/history/2026-09-05-before-review-PRD_MVP_Hub_Farmacia.md`; o histórico Git mantém as versões anteriores. O anexo original está em `docs/reference/PRD_MultiFarma_v1_1.md`. Seu prompt incorporado é conteúdo de referência, não uma nova autorização. A execução segue o pedido explícito de Brian.
+```text
+Use o PRD MultiFarma v1.1 como revisão de escopo do projeto existente. Primeiro compare-o com a versão atual do repositório, incluindo mudanças posteriores ao commit de referência. Preserve o que funciona; não reinicie o MVP nem reconstrua a mensageria.
 
-O vídeo não foi fornecido nesta execução: as observações sobre ele nas seções anteriores são atribuídas ao PRD anexo, não a uma nova análise audiovisual. Nenhum canal, banco ou deploy foi acessado para homologação.
+Atualize a documentação do projeto e o quadro de tarefas com responsável (Brian: produto/gestão; Fábio: segurança/dashboard/interface; Vitor: backend/infra/integrações), dependências, status real, evidência e próximo passo. Planeje uma janela de até sete dias por marcos desbloqueáveis, não por dias de espera.
 
-A seção 3 retrata o diagnóstico de entrada. A situação após as correções locais, os testes e as lacunas ainda abertas estão em `docs/GAP_REVIEW_2026-09-05.md` e `docs/MVP_TASKS.md`. Nenhum item está homologado.
+Comece pelos P0: autorização validada no servidor, isolamento de organização/unidade, segurança das APIs/webhooks, persistência transacional/idempotente de vendas e remoção de sucesso e indicadores fictícios fora do modo demo. Valide se os achados ainda existem antes de corrigi-los.
 
-Primeiro incremento: sessão verificada no servidor e vínculos atuais para dashboard/auditoria e páginas protegidas; dashboard consulta somente organização e filiais vinculadas; auditoria legada exige vínculo com todas as unidades da organização enquanto não existir atribuição confiável por filial. Ausência/ambiguidade de organização ou ausência de unidade nega acesso, sem vínculo fictício. O login existente ainda precisa eliminar seus próprios defaults.
+Depois execute encerramento comercial, motivos de não venda, contatos deduplicados, métricas operacionais reais e UI/UX da farmácia. Use identidade provisória até receber os ativos autorizados; não copie automaticamente a marca Pharma Chat Bot do fornecedor. Mantenha dashboard exclusivo de gerente, chat interno separado das conversas de clientes e sugestões sempre confirmadas por humano.
 
-Dashboard e auditoria não fabricam registros quando vazios ou indisponíveis. Conversão e total de conversas são nulos até instrumentar encerramentos; UI mostra Não disponível. Filtros de período, canal e unidade são aplicados no servidor. Períodos de 7/30 dias são janelas móveis; Hoje começa às 00h de São Paulo. Totais incompletos por limite da API falham explicitamente até agregação/paginação definitiva.
+Implemente em incrementos pequenos com testes e atualização do quadro a cada entrega. Separe implementado, testado localmente e homologado em canal real. Trate capacidades/configurações do Chatwoot e origem por status como itens a validar. Não apresente mock como integração real.
 
-As demais APIs, políticas RLS, webhooks e venda transacional continuam P0. Este incremento não libera uso com dados reais. Não há integração ERP neste escopo.
-
-## 14. Requisito de experiência unificada — solicitado após o incremento 1
-
-“O cliente deve perceber o produto como uma única interface, com um único ponto de entrada e, preferencialmente, uma única autenticação. O Chatwoot será a interface principal de atendimento. Venda, contatos, equipe e atalhos devem ficar integrados ao fluxo operacional. Dashboard, relatórios e auditoria aparecem na mesma navegação somente para o gerente.”
-
-RF-09: preservar o Chatwoot como caixa de atendimento e integrar os módulos existentes do Hub. Não criar nova caixa de mensagens. Avaliar personalização mínima, mesma navegação/domínio, autenticação unificada e impacto em atualizações. Preferência por autenticação única não é declaração de SSO implementado. Brian valida experiência; Fábio responde pela avaliação UNI-01, com Vitor em domínio/autenticação/atualizações. Implementação dessa avaliação depende de decisão registrada e do gate P0.
-
-## 15. Incremento 2 — P0 implementados e ensaiados localmente
-
-- Todos os handlers sensíveis do Hub passam por sessão e vínculo no servidor; consultas REST usam JWT do usuário, não chave privilegiada. Login/me não inventam organização/unidade; logout não declara revogação quando GoTrue falha. POST com cookies exige origem válida.
-- Venda usa a RPC record_sale: cabeçalho, itens, auditoria, eventual cliente e resultado idempotente participam da mesma transação PostgreSQL. Autoria vem de auth.uid(); conversa, organização, unidade, produtos, valores e desfecho são validados no banco. Repetição de chave retorna o mesmo registro; payload diferente é conflito. Não há 201 fictício.
-- Migração local 20260905165519_harden_p0_access_and_transactions.sql substitui políticas antigas, restringe grants, protege salas gerais por vínculo e organização, separa admin técnico do gerente, mantém funções privilegiadas em hub_private e valida referências cruzadas nas novas escritas. Não foi aplicada em ambiente remoto. Constraints NOT VALID não reescrevem nem homologam dados antigos.
-- Webhooks exigem assinatura HMAC dos bytes e timestamp com janela de cinco minutos, conta/inbox mapeados e identidade estável do evento. Reserva/deduplicação persistem em PostgreSQL. Resultado externo incerto não é repetido automaticamente; exige reconciliação. O mecanismo de assinatura precisa ser configurado e comprovado no emissor/ingress real, sem presumir suporte nativo na versão instalada do Chatwoot.
-- Rotas paralelas inseguras do serviço de integração foram desativadas; seus equivalentes funcionais permanecem no Hub autenticado. Bot/adaptador existentes foram reaproveitados. Catálogo do painel vem do banco e sugestões sintéticas ficam indisponíveis fora demo. Alterações no widget limitaram-se ao protocolo seguro, contexto, chave de repetição e falha explícita.
-
-Evidência detalhada, comandos, limites e arquivos em docs/P0_INCREMENT_2.md. A suíte usa PostgreSQL WASM real local para SQL; GoTrue/PostgREST/Chatwoot são simulados no HTTP. Não equivale a homologação do Supabase hospedado, de concorrência entre processos PostgreSQL nativos ou dos canais reais. Permanecem gates de ambiente, rotação de credencial anteriormente fixada no código e validação do legado. Sem deploy, mudança em produção ou migração de dados/canais.
+Não aplique alterações em banco de produção, faça deploy ou migre dados/canais sem autorização específica. Quando faltar uma decisão do cliente, registre hipótese e avance nas tarefas independentes. Comece agora pela inspeção e primeira correção P0 comprovada; ao concluir, informe o que mudou, os testes executados e o próximo marco.
+```

@@ -1,96 +1,103 @@
-import { describe, it, expect } from 'vitest';
-import { POST as loginHandler } from '../app/api/auth/login/route';
-import { POST as logoutHandler } from '../app/api/auth/logout/route';
-import { NextRequest } from 'next/server';
-
-describe('Sistema de Autenticação Real Supabase Auth & RBAC', () => {
-  it('Login com credenciais de Gerente retorna HTTP 200, papel manager e destino /dashboard', async () => {
-    const req = new NextRequest('http://localhost:3000/api/auth/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        email: 'carlos.gerente@multifarma.com',
-        password: 'MultiFarma@2026',
-      }),
-    });
-
-    const res = await loginHandler(req);
-    expect(res.status).toBe(200);
-
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(body.user.role).toBe('manager');
-    expect(body.user.email).toBe('carlos.gerente@multifarma.com');
-    expect(body.redirectTo).toBe('/dashboard');
-
-    // Verifica presença do cookie de sessão Supabase
-    const setCookieHeader = res.headers.get('set-cookie');
-    expect(setCookieHeader).toContain('sb_access_token');
-    expect(setCookieHeader).toContain('mf_user_role=manager');
+import { describe, it, expect, beforeEach } from "vitest";
+import { POST as login } from "../app/api/auth/login/route";
+import { POST as logout } from "../app/api/auth/logout/route";
+import { GET as me } from "../app/api/auth/me/route";
+import { NextRequest } from "next/server";
+import { httpFixture } from "../../../../tests/support/http";
+let state: ReturnType<typeof httpFixture>;
+beforeEach(() => {
+  state = httpFixture("manager");
+});
+function request(path: string, body: any = {}, cookie = "") {
+  return new NextRequest("http://localhost:3000" + path, {
+    method: "POST",
+    headers: {
+      origin: "http://localhost:3000",
+      "content-type": "application/json",
+      cookie,
+    },
+    body: JSON.stringify(body),
   });
-
-  it('Login com credenciais de Atendente retorna HTTP 200, papel agent e destino /chatwoot-widget', async () => {
-    const req = new NextRequest('http://localhost:3000/api/auth/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        email: 'ana.atendente@multifarma.com',
-        password: 'MultiFarma@2026',
-      }),
-    });
-
-    const res = await loginHandler(req);
-    expect(res.status).toBe(200);
-
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(body.user.role).toBe('agent');
-    expect(body.redirectTo).toBe('/chatwoot-widget');
-
-    const setCookieHeader = res.headers.get('set-cookie');
-    expect(setCookieHeader).toContain('mf_user_role=agent');
+}
+describe("Autenticação — HTTP isolado, não homologação GoTrue", () => {
+  it.each(["manager", "agent", "admin"])(
+    "login %s usa vínculo servidor e cookies HttpOnly",
+    async (role) => {
+      state.role = role;
+      const res = await login(
+        request("/api/auth/login", {
+          email: "test@example.invalid",
+          password: "synthetic",
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.user.role).toBe(role);
+      expect(body.redirectTo).toBe(
+        role === "manager" ? "/dashboard" : "/chatwoot-widget",
+      );
+      expect(res.headers.get("set-cookie")).toContain("HttpOnly");
+    },
+  );
+  it("rejeita senha incorreta", async () => {
+    expect(
+      (
+        await login(
+          request("/api/auth/login", {
+            email: "test@example.invalid",
+            password: "wrong",
+          }),
+        )
+      ).status,
+    ).toBe(401);
   });
-
-  it('Login com senha incorreta retorna HTTP 401 e mensagem amigável de erro', async () => {
-    const req = new NextRequest('http://localhost:3000/api/auth/login', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        email: 'carlos.gerente@multifarma.com',
-        password: 'SenhaTotalmenteIncorreta123!',
-      }),
-    });
-
-    const res = await loginHandler(req);
-    expect(res.status).toBe(401);
-
-    const body = await res.json();
-    expect(body.error).toBe('INVALID_CREDENTIALS');
-    expect(body.message).toContain('E-mail ou senha incorretos');
+  it("não inventa organização ou filial no login", async () => {
+    state.members = false;
+    expect(
+      (
+        await login(
+          request("/api/auth/login", {
+            email: "test@example.invalid",
+            password: "synthetic",
+          }),
+        )
+      ).status,
+    ).toBe(403);
   });
-
-  it('Logout revoga sessão e expira os cookies de autenticação', async () => {
-    const req = new NextRequest('http://localhost:3000/api/auth/logout', {
-      method: 'POST',
-      headers: {
-        cookie: 'sb_access_token=fake_token; mf_user_role=manager;',
-      },
-    });
-
-    const res = await logoutHandler(req);
+  it("me valida token e recusa falta de vínculo", async () => {
+    state.branches = false;
+    expect(
+      (
+        await me(
+          new NextRequest("http://localhost:3000/api/auth/me", {
+            headers: { authorization: "Bearer verified" },
+          }),
+        )
+      ).status,
+    ).toBe(403);
+  });
+  it("logout verifica retorno remoto e expira cookies", async () => {
+    const res = await logout(
+      request("/api/auth/logout", {}, "sb_access_token=verified"),
+    );
     expect(res.status).toBe(200);
-
-    const body = await res.json();
-    expect(body.success).toBe(true);
-    expect(body.redirectTo).toBe('/login');
-
-    const setCookieHeader = res.headers.get('set-cookie');
-    expect(setCookieHeader).toContain('Max-Age=0');
+    expect(res.headers.get("set-cookie")).toContain("Max-Age=0");
+  });
+  it("logout não relata revogação bem-sucedida se serviço falhar", async () => {
+    state.fail = "logout";
+    const res = await logout(
+      request("/api/auth/logout", {}, "sb_access_token=verified"),
+    );
+    expect(res.status).toBe(503);
+    expect((await res.json()).success).toBe(false);
+  });
+  it("bloqueia login com origem cruzada", async () => {
+    const req = new NextRequest("http://localhost:3000/api/auth/login", {
+      method: "POST",
+      headers: { origin: "https://evil.invalid" },
+      body: "{}",
+    });
+    expect((await login(req)).status).toBe(403);
+    expect(state.calls).toHaveLength(0);
   });
 });
