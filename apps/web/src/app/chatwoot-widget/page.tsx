@@ -131,9 +131,11 @@ export default function ChatwootWidgetPage() {
     const qConv = params.get('conversation_id') || params.get('id');
     const qName = params.get('contact_name') || params.get('name');
     const qPhone = params.get('contact_phone') || params.get('phone');
+    const qChannel = params.get('channel');
     if (qConv) setConversationId(parseInt(qConv, 10));
     if (qName) setCustomerName(qName);
     if (qPhone) setCustomerPhone(qPhone);
+    if (qChannel) setChannel(qChannel.toLowerCase());
 
     // 2. Solicitar contexto ao Chatwoot via postMessage
     const requestContext = () => {
@@ -152,9 +154,20 @@ export default function ChatwootWidgetPage() {
         if (data?.event === 'chatwoot:ready' || data?.event === 'appContext') {
           const conv = data.data?.conversation;
           const contact = data.data?.contact;
+          const inbox = data.data?.inbox || conv?.inbox;
           if (conv?.id) setConversationId(conv.id);
           if (contact?.name) setCustomerName(contact.name);
           if (contact?.phone_number) setCustomerPhone(contact.phone_number);
+
+          // Detecta canal da conversa (WhatsApp, Instagram, Messenger)
+          const chStr = (inbox?.channel_type || conv?.channel || inbox?.name || '').toLowerCase();
+          if (inbox?.id === 2 || chStr.includes('instagram')) {
+            setChannel('instagram');
+          } else if (inbox?.id === 3 || chStr.includes('facebook') || chStr.includes('messenger')) {
+            setChannel('messenger');
+          } else if (chStr.includes('whats') || inbox?.id === 1) {
+            setChannel('whatsapp');
+          }
         }
       } catch {
         // ignora mensagens que não sejam JSON do chatwoot
@@ -400,9 +413,19 @@ export default function ChatwootWidgetPage() {
             </p>
           </div>
         </div>
-        <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold text-[10px] uppercase">
-          {channel}
-        </span>
+        {channel === 'instagram' ? (
+          <span className="px-2.5 py-0.5 rounded-full bg-gradient-to-r from-pink-500/20 to-purple-500/20 text-pink-300 border border-pink-500/30 font-bold text-[10px] uppercase flex items-center gap-1 shadow-sm">
+            <span>📸</span> Instagram
+          </span>
+        ) : channel === 'messenger' || channel === 'facebook' ? (
+          <span className="px-2.5 py-0.5 rounded-full bg-blue-500/20 text-blue-300 border border-blue-500/30 font-bold text-[10px] uppercase flex items-center gap-1 shadow-sm">
+            <span>💬</span> Messenger
+          </span>
+        ) : (
+          <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold text-[10px] uppercase flex items-center gap-1 shadow-sm">
+            <span>📱</span> WhatsApp
+          </span>
+        )}
       </div>
 
       {/* Barra de Controle e Atribuição de Atendimento */}

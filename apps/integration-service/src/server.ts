@@ -112,38 +112,81 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
           agentBotService.deactivateBotForConversation(convId, 'AGENT_SENT_MESSAGE_WEBHOOK');
         }
       } else if (convId && isIncoming) {
-        // Mensagem recebida do cliente no WhatsApp
-        // 0. Auto-cadastro silencioso de cliente no Supabase CRM
+        // Mensagem recebida do cliente (WhatsApp, Instagram ou Messenger)
+        const inboxObj = (event as any).inbox || (event as any).conversation?.inbox;
+        const currentInboxId = (event as any).inbox_id || (event as any).conversation?.inbox_id || inboxObj?.id || 1;
+        const channelTypeStr = (inboxObj?.channel_type || (event as any).conversation?.channel || '').toLowerCase();
+        const inboxNameStr = (inboxObj?.name || '').toLowerCase();
+
+        let detectedChannel = 'whatsapp';
+        if (currentInboxId === 2 || channelTypeStr.includes('instagram') || inboxNameStr.includes('instagram')) {
+          detectedChannel = 'instagram';
+        } else if (currentInboxId === 3 || channelTypeStr.includes('facebook') || inboxNameStr.includes('messenger') || inboxNameStr.includes('facebook')) {
+          detectedChannel = 'messenger';
+        }
+
+        // 0. Auto-cadastro silencioso de cliente no Supabase CRM com suporte Omnichannel
         const senderObj = (event as any).sender || (event as any).conversation?.meta?.sender;
         const senderPhone = senderObj?.phone_number || '';
-        const senderName = senderObj?.name || 'Cliente WhatsApp';
+        const defaultName = detectedChannel === 'instagram' ? 'Cliente Instagram' : (detectedChannel === 'messenger' ? 'Cliente Messenger' : 'Cliente WhatsApp');
+        const senderName = senderObj?.name || defaultName;
         const cleanPhone = senderPhone.replace(/\D/g, '');
 
-        if (cleanPhone && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
-          fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customers?phone=eq.${cleanPhone}&organization_id=eq.11111111-1111-1111-1111-111111111111&select=id`, {
-            headers: {
-              'apikey': CONFIG.SUPABASE_SECRET_KEY,
-              'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
-            },
-          }).then(r => r.json()).then(async (existing: any) => {
-            if (!Array.isArray(existing) || existing.length === 0) {
-              await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customers`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'apikey': CONFIG.SUPABASE_SECRET_KEY,
-                  'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
-                  'Prefer': 'return=minimal',
-                },
-                body: JSON.stringify({
-                  organization_id: '11111111-1111-1111-1111-111111111111',
-                  name: senderName,
-                  phone: cleanPhone,
-                }),
-              });
-              console.log(`[Supabase CRM] Cliente salvo automaticamente no banco: ${senderName} (${cleanPhone})`);
+        if (CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
+          (async () => {
+            try {
+              let existingCustomer: any = null;
+              if (cleanPhone) {
+                const r = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customers?phone=eq.${cleanPhone}&organization_id=eq.11111111-1111-1111-1111-111111111111&select=id`, {
+                  headers: { 'apikey': CONFIG.SUPABASE_SECRET_KEY, 'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}` },
+                });
+                const d = await r.json();
+                if (Array.isArray(d) && d.length > 0) existingCustomer = d[0];
+              }
+
+              if (!existingCustomer) {
+                const createRes = await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customers`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'apikey': CONFIG.SUPABASE_SECRET_KEY,
+                    'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
+                    'Prefer': 'return=representation',
+                  },
+                  body: JSON.stringify({
+                    organization_id: '11111111-1111-1111-1111-111111111111',
+                    name: senderName,
+                    phone: cleanPhone || null,
+                  }),
+                });
+                const createdCust = await createRes.json();
+                if (Array.isArray(createdCust) && createdCust[0]?.id) {
+                  existingCustomer = createdCust[0];
+                  console.log(`[Supabase CRM] Cliente salvo (${detectedChannel}): ${senderName}`);
+                }
+              }
+
+              if (existingCustomer?.id) {
+                const extId = cleanPhone || String(senderObj?.id || `conv_${convId}`);
+                await fetch(`${CONFIG.SUPABASE_URL}/rest/v1/customer_channels`, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'apikey': CONFIG.SUPABASE_SECRET_KEY,
+                    'Authorization': `Bearer ${CONFIG.SUPABASE_SECRET_KEY}`,
+                    'Prefer': 'return=minimal',
+                  },
+                  body: JSON.stringify({
+                    customer_id: existingCustomer.id,
+                    channel_type: detectedChannel === 'messenger' ? 'facebook' : detectedChannel,
+                    external_id: extId,
+                  }),
+                }).catch(() => {});
+              }
+            } catch (err) {
+              console.warn('[Supabase CRM] Erro ao sincronizar cliente omnichannel:', err);
             }
-          }).catch((err) => console.warn('[Supabase CRM] Erro ao sincronizar cliente:', err));
+          })();
         }
 
         // 1. Extração silenciosa de dados comerciais para a Dashboard App
@@ -158,12 +201,12 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
 
         // 2. Disparo do Bot de Triagem (se bot estiver ativo para essa conversa)
         const currentState = agentBotService.getConversationState(convId);
-        console.log(`[Chatwoot Webhook] Estado do bot na conversa #${convId}: ${currentState}`);
+        console.log(`[Chatwoot Webhook] Estado do bot na conversa #${convId} (${detectedChannel}): ${currentState}`);
 
         if (currentState === 'BOT_ACTIVE') {
           const fakeMsg = {
             id: msgId || Date.now(),
-            inbox_id: 1,
+            inbox_id: currentInboxId,
             conversation_id: convId,
             message_type: 'incoming' as const,
             content: event.content || '',
@@ -176,10 +219,10 @@ app.post('/internal/chatwoot/webhook', async (req: Request, res: Response) => {
             id: convId,
             account_id: 1,
             status: 'pending' as const,
-            inbox_id: 1,
+            inbox_id: currentInboxId,
           };
           const decision = await agentBotService.handleIncomingMessage(fakeConv, fakeMsg);
-          console.log(`[Chatwoot Webhook] Decisão da triagem #${convId}:`, decision);
+          console.log(`[Chatwoot Webhook] Decisão da triagem #${convId} (${detectedChannel}):`, decision);
 
           if (decision.transition_to_human && CONFIG.SUPABASE_URL && CONFIG.SUPABASE_SECRET_KEY) {
             try {

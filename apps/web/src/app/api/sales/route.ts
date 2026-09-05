@@ -44,13 +44,36 @@ export async function POST(request: NextRequest) {
             method: 'POST',
             body: {
               organization_id: input.organization_id,
-              name: input.customer_name || 'Cliente WhatsApp',
+              name: input.customer_name || 'Cliente Farmácia',
               phone: phoneClean,
             },
           });
           if (newCust.data && newCust.data[0]?.id) {
             realCustomerId = newCust.data[0].id;
             console.log('[Supabase Customers] Novo cliente gravado no Supabase:', realCustomerId, input.customer_name);
+          }
+        }
+      } else if (input.customer_name) {
+        const existingByName = await supabaseRest<any[]>('customers', {
+          params: {
+            name: `eq.${input.customer_name}`,
+            organization_id: `eq.${input.organization_id}`,
+            select: 'id,name',
+          },
+        });
+        if (existingByName.data && existingByName.data.length > 0 && existingByName.data[0]?.id) {
+          realCustomerId = existingByName.data[0].id;
+        } else {
+          const newCust = await supabaseRest<any[]>('customers', {
+            method: 'POST',
+            body: {
+              organization_id: input.organization_id,
+              name: input.customer_name,
+            },
+          });
+          if (newCust.data && newCust.data[0]?.id) {
+            realCustomerId = newCust.data[0].id;
+            console.log('[Supabase Customers] Novo cliente omnichannel gravado:', realCustomerId, input.customer_name);
           }
         }
       }
