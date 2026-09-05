@@ -35,8 +35,12 @@ export async function supabaseRest<T = any>(
       );
     }
 
+    const isServiceRole =
+      Boolean(process.env.SUPABASE_SECRET_KEY) &&
+      options.accessToken === process.env.SUPABASE_SECRET_KEY;
+
     const headers: Record<string, string> = {
-      apikey: SUPABASE_ANON_KEY,
+      apikey: isServiceRole ? options.accessToken! : SUPABASE_ANON_KEY,
       Authorization: `Bearer ${options.accessToken}`,
       "Content-Type": "application/json",
       Prefer: "return=representation",

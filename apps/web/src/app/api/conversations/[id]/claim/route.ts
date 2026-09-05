@@ -7,12 +7,44 @@ export async function GET(
 ) {
   const auth = await conversationAccess(request, params.id);
   if ("response" in auth) return auth.response;
+
+  let claimedByName: string | null = null;
+  let branchName = "Matriz Centro";
+
+  if (auth.conversation.assigned_user_id) {
+    const profileRes = await supabaseRest<any[]>("profiles", {
+      accessToken: auth.context.accessToken,
+      params: {
+        id: `eq.${auth.conversation.assigned_user_id}`,
+        select: "full_name",
+      },
+    });
+    if (profileRes.data?.[0]?.full_name) {
+      claimedByName = profileRes.data[0].full_name;
+    }
+  }
+
+  if (auth.conversation.branch_id) {
+    const branchRes = await supabaseRest<any[]>("branches", {
+      accessToken: auth.context.accessToken,
+      params: {
+        id: `eq.${auth.conversation.branch_id}`,
+        select: "name",
+      },
+    });
+    if (branchRes.data?.[0]?.name) {
+      branchName = branchRes.data[0].name;
+    }
+  }
+
   return NextResponse.json({
     is_claimed:
       !!auth.conversation.assigned_user_id ||
       !!auth.conversation.chatwoot_assignee_id,
-    claimed_by: auth.conversation.assigned_user_id,
-    branch: auth.conversation.branch_id,
+    claimed_by: claimedByName || auth.conversation.assigned_user_id,
+    claimed_user_id: auth.conversation.assigned_user_id,
+    branch: branchName,
+    branch_id: auth.conversation.branch_id,
   });
 }
 export async function POST(
@@ -67,11 +99,28 @@ export async function POST(
         { error: "CHATWOOT_SYNC_PENDING" },
         { status: 502 },
       );
+
+    let branchName = "Matriz Centro";
+    if (claim.data.branch_id) {
+      const branchRes = await supabaseRest<any[]>("branches", {
+        accessToken: auth.context.accessToken,
+        params: {
+          id: `eq.${claim.data.branch_id}`,
+          select: "name",
+        },
+      });
+      if (branchRes.data?.[0]?.name) {
+        branchName = branchRes.data[0].name;
+      }
+    }
+
     return NextResponse.json({
       success: true,
       is_claimed: true,
       claimed_by: auth.context.fullName,
-      branch: claim.data.branch_id,
+      claimed_user_id: auth.context.userId,
+      branch: branchName,
+      branch_id: claim.data.branch_id,
     });
   } catch {
     return NextResponse.json(

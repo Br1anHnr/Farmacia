@@ -81,6 +81,27 @@ export async function GET(request: NextRequest) {
     messenger: 0,
   };
 
+  const [profilesRes, branchesRes] = await Promise.all([
+    supabaseRest<any[]>("profiles", {
+      accessToken: auth.context.accessToken,
+      params: { select: "id,full_name" },
+    }),
+    supabaseRest<any[]>("branches", {
+      accessToken: auth.context.accessToken,
+      params: { select: "id,name" },
+    }),
+  ]);
+
+  const profileNameMap = new Map<string, string>();
+  (profilesRes.data || []).forEach((p) => {
+    if (p.id && p.full_name) profileNameMap.set(p.id, p.full_name);
+  });
+
+  const branchNameMap = new Map<string, string>();
+  (branchesRes.data || []).forEach((b) => {
+    if (b.id && b.name) branchNameMap.set(b.id, b.name);
+  });
+
   const branchMap: Record<
     string,
     { total: number; count: number; name: string }
@@ -105,14 +126,22 @@ export async function GET(request: NextRequest) {
 
     const bId = s.branch_id || "unknown";
     if (!branchMap[bId]) {
-      branchMap[bId] = { total: 0, count: 0, name: "Unidade " + bId };
+      branchMap[bId] = {
+        total: 0,
+        count: 0,
+        name: branchNameMap.get(bId) || "Matriz Centro",
+      };
     }
     branchMap[bId].total += val;
     branchMap[bId].count += 1;
 
     const aId = s.agent_id || "unknown";
     if (!agentMap[aId]) {
-      agentMap[aId] = { total: 0, count: 0, name: "Colaborador " + aId };
+      agentMap[aId] = {
+        total: 0,
+        count: 0,
+        name: profileNameMap.get(aId) || "Atendente",
+      };
     }
     agentMap[aId].total += val;
     agentMap[aId].count += 1;

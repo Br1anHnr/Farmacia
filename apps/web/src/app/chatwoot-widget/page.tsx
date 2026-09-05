@@ -23,6 +23,7 @@ import {
   ExternalLink,
   ChevronRight,
   ShieldAlert,
+  X,
 } from "lucide-react";
 import { AUTH_COOKIE_NAME, type UserContext } from "@/lib/auth-store";
 import { HubShell } from "@/components/layout/hub-shell";
@@ -71,14 +72,40 @@ export default function ChatwootWidgetPage() {
   const [prefilledItems, setPrefilledItems] = useState<any[]>([]);
 
   // Notas internas
+  interface NoteItem {
+    id: string;
+    content: string;
+    sender: string;
+    created_at?: string;
+  }
   const [internalNote, setInternalNote] = useState("");
-  const [notesList, setNotesList] = useState<string[]>([]);
+  const [notesList, setNotesList] = useState<NoteItem[]>([]);
   const [sendingNote, setSendingNote] = useState(false);
   const [noteSuccess, setNoteSuccess] = useState(false);
 
   // Status de encerramento
   const [closureCompleted, setClosureCompleted] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  function formatErrorMessage(codeOrMsg: string) {
+    if (!codeOrMsg) return "";
+    const map: Record<string, string> = {
+      CONVERSATION_NOT_FOUND:
+        "Conversa não vinculada ao sistema da farmácia. Verifique se o ID está correto.",
+      ACCESS_DENIED: "Acesso negado para este atendimento.",
+      ALREADY_ASSIGNED: "Esta conversa já foi assumida por outro atendente.",
+      CHATWOOT_CONFIGURATION_REQUIRED:
+        "Configuração de sincronização com o Chatwoot pendente no servidor.",
+      CHATWOOT_SYNC_PENDING:
+        "Atendimento assumido localmente, mas a sincronização com o Chatwoot está pendente.",
+      CHATWOOT_MAPPING_REQUIRED:
+        "Seu usuário ainda não possui mapeamento correspondente no Chatwoot.",
+      DATA_UNAVAILABLE: "Serviço temporariamente indisponível. Tente novamente em instantes.",
+      CLOSURE_ACCESS_DENIED:
+        "Você não possui permissão para encerrar este atendimento nesta unidade.",
+    };
+    return map[codeOrMsg] || codeOrMsg;
+  }
 
   useEffect(() => {
     setIsEmbedded(window.self !== window.top);
@@ -200,9 +227,16 @@ export default function ChatwootWidgetPage() {
       })
       .catch(() => {});
 
-    // Status de Claim
-    fetch(`/api/conversations/${conversationId}/claim`)
-      .then((r) => (r.ok ? r.json() : null))
+    // Garante vínculo e sincronização de contexto com Chatwoot
+    fetch(`/api/conversations/${conversationId}/sync-context`, {
+      method: "POST",
+    })
+      .then(() => {
+        if (!active) return;
+        // Status de Claim
+        return fetch(`/api/conversations/${conversationId}/claim`);
+      })
+      .then((r) => (r && r.ok ? r.json() : null))
       .then((data) => {
         if (active && data) {
           if (data.branch_id) setBranchId(data.branch_id);
@@ -214,6 +248,16 @@ export default function ChatwootWidgetPage() {
               branch: data.branch || branchName,
             });
           }
+        }
+      })
+      .catch(() => {});
+
+    // Busca notas internas
+    fetch(`/api/conversations/${conversationId}/notes`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && data?.notes) {
+          setNotesList(data.notes);
         }
       })
       .catch(() => {});
@@ -268,26 +312,57 @@ export default function ChatwootWidgetPage() {
   };
 
   const handleSendInternalNote = async () => {
-    if (!internalNote.trim()) return;
+    if (!internalNote.trim() || !conversationId) return;
     setSendingNote(true);
-    // Simula registro de nota interna local e Chatwoot
-    setTimeout(() => {
-      setNotesList((prev) => [internalNote.trim(), ...prev]);
-      setInternalNote("");
+    try {
+      const res = await fetch(`/api/conversations/${conversationId}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: internalNote.trim() }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNotesList((prev) => [
+          data.note || {
+            id: String(Date.now()),
+            content: internalNote.trim(),
+            sender: currentUser?.full_name?.split(" ")[0] || "Você",
+            created_at: new Date().toISOString(),
+          },
+          ...prev,
+        ]);
+        setInternalNote("");
+        setNoteSuccess(true);
+        setTimeout(() => setNoteSuccess(false), 2500);
+      } else {
+        const err = await res.json();
+        setErrorMsg(err.message || err.error || "Não foi possível registrar a anotação.");
+      }
+    } catch {
+      setErrorMsg("Erro de conexão ao salvar nota interna.");
+    } finally {
       setSendingNote(false);
-      setNoteSuccess(true);
-      setTimeout(() => setNoteSuccess(false), 2500);
-    }, 400);
+    }
   };
 
   // Render do painel compacto de atendimento
   const content = (
     <div className="space-y-4 max-w-4xl mx-auto">
-      {/* Alerta de erro */}
+      {/* Alerta de erro formatado e amigável */}
       {errorMsg && (
-        <div className="flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-800 animate-in fade-in">
-          <AlertCircle className="h-4 w-4 text-red-600 shrink-0" />
-          <p>{errorMsg}</p>
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-800 animate-in fade-in">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="h-4 w-4 text-red-600 shrink-0" />
+            <p>{formatErrorMessage(errorMsg)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setErrorMsg(null)}
+            className="text-red-400 hover:text-red-700 p-0.5"
+            aria-label="Fechar alerta"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 
@@ -548,14 +623,17 @@ export default function ChatwootWidgetPage() {
 
             {/* Lista de notas gravadas */}
             {notesList.length > 0 && (
-              <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">
+              <div className="mt-4 space-y-2 border-t border-slate-100 pt-3 max-h-64 overflow-y-auto">
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500 block">
-                  Anotações Recentes
+                  Anotações Recentes ({notesList.length})
                 </span>
-                {notesList.map((n, i) => (
-                  <div key={i} className="rounded-lg bg-amber-50/60 border border-amber-200/60 p-2.5 text-xs text-amber-950">
-                    <p>{n}</p>
-                    <span className="text-[10px] text-amber-700/80 block mt-1">Registrado agora por {currentUser?.full_name?.split(" ")[0]}</span>
+                {notesList.map((n) => (
+                  <div key={n.id} className="rounded-xl bg-amber-50/70 border border-amber-200/70 p-2.5 text-xs text-amber-950 shadow-2xs">
+                    <p className="whitespace-pre-wrap">{n.content}</p>
+                    <span className="text-[10px] text-amber-800/80 block mt-1 font-medium">
+                      {n.sender}
+                      {n.created_at ? ` • ${new Date(n.created_at).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às ${new Date(n.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                    </span>
                   </div>
                 ))}
               </div>

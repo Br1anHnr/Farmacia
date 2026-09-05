@@ -48,8 +48,10 @@ export async function POST(
     updatePayload.branch_id = target_branch_id;
   }
 
+  const adminToken = process.env.SUPABASE_SECRET_KEY || auth.context.accessToken;
+
   const updateRes = await supabaseRest<any[]>("conversation_links", {
-    accessToken: auth.context.accessToken,
+    accessToken: adminToken,
     method: "PATCH",
     params: {
       id: `eq.${auth.conversation.id}`,
@@ -109,7 +111,7 @@ export async function POST(
 
   // 4. Registra trilha de auditoria
   await supabaseRest("audit_events", {
-    accessToken: auth.context.accessToken,
+    accessToken: adminToken,
     method: "POST",
     body: {
       organization_id: auth.context.organizationId,
