@@ -3,7 +3,7 @@ import { authorize } from "./lib/server-auth";
 export async function middleware(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const managerOnly =
-    /^\/(dashboard|audit)(\/|$)/.test(path) ||
+    /^\/(dashboard|audit|reports)(\/|$)/.test(path) ||
     /^\/api\/(dashboard|audit)(\/|$)/.test(path);
   const result = await authorize(request, managerOnly);
   if ("response" in result) {
@@ -22,6 +22,8 @@ export const config = {
   matcher: [
     "/dashboard/:path*",
     "/audit/:path*",
+    "/reports/:path*",
+    "/contacts/:path*",
     "/chat/:path*",
     "/chatwoot-widget/:path*",
     "/api/dashboard/:path*",

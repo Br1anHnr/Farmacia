@@ -9,27 +9,15 @@
     --card: #ffffff;
     --card-foreground: #0f172a;
     --border: #e2e8f0;
-    --primary: #059669;
+    --primary: #dc2626;
+    --primary-hover: #b91c1c;
     --primary-foreground: #ffffff;
+    --sidebar-bg: #b91c1c;
+    --sidebar-hover: #991b1b;
+    --sidebar-active: #7f1d1d;
     --muted: #64748b;
     --muted-foreground: #94a3b8;
-    --accent: #10b981;
-    --accent-foreground: #ffffff;
     --radius: 0.75rem;
-  }
-
-  .dark {
-    --background: #090d16;
-    --foreground: #f8fafc;
-    --card: #111827;
-    --card-foreground: #f8fafc;
-    --border: #1f2937;
-    --primary: #10b981;
-    --primary-foreground: #090d16;
-    --muted: #94a3b8;
-    --muted-foreground: #64748b;
-    --accent: #059669;
-    --accent-foreground: #ffffff;
   }
 }
 
@@ -38,23 +26,6 @@ body {
   color: var(--foreground);
   font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   min-height: 100vh;
-}
-
-/* Glassmorphism e Efeitos Visuais Premium */
-.glass-panel {
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(226, 232, 240, 0.8);
-}
-
-.dark .glass-panel {
-  background: rgba(17, 24, 39, 0.75);
-  border: 1px solid rgba(31, 41, 55, 0.8);
-}
-
-.glow-emerald {
-  box-shadow: 0 0 25px -5px rgba(16, 185, 129, 0.25);
 }
 
 /* Custom Scrollbars */
@@ -66,9 +37,9 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.4);
+  background: #cbd5e1;
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(100, 116, 139, 0.6);
+  background: #94a3b8;
 }

@@ -35,10 +35,10 @@ async function roomAccess(request: NextRequest, room: unknown) {
     };
   return { context: auth.context, roomId: rooms.data[0].id };
 }
-function format(m: any) {
+function format(m: any, defaultSender?: string) {
   return {
     ...m,
-    sender: m.sender_id,
+    sender: m.profiles?.full_name || defaultSender || m.sender_id,
     time: new Date(m.created_at).toLocaleTimeString("pt-BR", {
       hour: "2-digit",
       minute: "2-digit",
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
     accessToken: auth.context.accessToken,
     params: {
       room_id: "eq." + auth.roomId,
-      select: "id,sender_id,content,created_at",
+      select: "id,sender_id,content,created_at,profiles(full_name)",
       order: "created_at.desc",
       limit: "100",
     },
@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
   if (res.error)
     return NextResponse.json({ error: "DATA_UNAVAILABLE" }, { status: 503 });
   return NextResponse.json({
-    messages: (res.data || []).reverse().map(format),
+    messages: (res.data || []).reverse().map((m) => format(m)),
   });
 }
 export async function POST(request: NextRequest) {
@@ -98,5 +98,8 @@ export async function POST(request: NextRequest) {
       { error: "MESSAGE_NOT_PERSISTED" },
       { status: 503 },
     );
-  return NextResponse.json({ message: format(res.data[0]) }, { status: 201 });
+  return NextResponse.json(
+    { message: format(res.data[0], auth.context.fullName) },
+    { status: 201 },
+  );
 }
