@@ -1,4 +1,4 @@
-"useclient";
+"use client";
 
 import React, { useState, useEffect } from "react";
 import { UserCheck, ArrowRightLeft, AlertCircle, CheckCircle, Loader2, X } from "lucide-react";
@@ -15,6 +15,7 @@ interface TransferModalProps {
   isOpen: boolean;
   onClose: () => void;
   conversationId: number;
+  accountId: number;
   currentAgentName: string;
   currentBranchName: string;
   currentBranchId: string;
@@ -25,6 +26,7 @@ export function TransferModal({
   isOpen,
   onClose,
   conversationId,
+  accountId,
   currentAgentName,
   currentBranchName,
   currentBranchId,
@@ -54,12 +56,16 @@ export function TransferModal({
       setFetchingAgents(true);
       setError(null);
       try {
-        const res = await fetch("/api/agents");
+        const res = await fetch(
+          `/api/agents?conversation_id=${conversationId}&account_id=${accountId}`,
+        );
         if (!res.ok) {
           throw new Error("Não foi possível carregar a lista de colaboradores.");
         }
         const data = await res.json();
-        setAgents(data.agents || []);
+        const loaded = data.agents || [];
+        setAgents(loaded);
+        if (!selectedBranchId && loaded[0]?.branch_id) setSelectedBranchId(loaded[0].branch_id);
       } catch (err: any) {
         setError(err.message || "Erro de conexão ao buscar atendentes.");
       } finally {
@@ -68,11 +74,12 @@ export function TransferModal({
     }
 
     loadAgents();
-  }, [isOpen]);
+  }, [accountId, conversationId, isOpen]);
 
   if (!isOpen) return null;
 
-  const selectedAgent = agents.find((a) => a.id === selectedAgentId);
+  const eligibleAgents = agents.filter((agent) => agent.branch_id === selectedBranchId);
+  const selectedAgent = eligibleAgents.find((a) => a.id === selectedAgentId);
 
   // Extrair lista unica de filiais dos agentes
   const branchOptions = Array.from(
@@ -89,7 +96,9 @@ export function TransferModal({
     setError(null);
 
     try {
-      const res = await fetch(`/api/conversations/${conversationId}/transfer`, {
+      const res = await fetch(
+        `/api/conversations/${conversationId}/transfer?account_id=${accountId}`,
+        {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -97,7 +106,8 @@ export function TransferModal({
           target_branch_id: selectedBranchId || selectedAgent?.branch_id,
           note: note.trim() || undefined,
         }),
-      });
+        },
+      );
 
       const data = await res.json();
 
@@ -107,16 +117,11 @@ export function TransferModal({
 
       setSuccess(true);
       setTimeout(() => {
-        const targetBranchName =
-          branchOptions.find((b) => b.id === (selectedBranchId || selectedAgent?.branch_id))?.name ||
-          selectedAgent?.branch_name ||
-          currentBranchName;
-
         onSuccess({
-          agentId: selectedAgentId,
-          agentName: selectedAgent?.name || "Colaborador",
-          branchId: selectedBranchId || selectedAgent?.branch_id || currentBranchId,
-          branchName: targetBranchName,
+          agentId: data.transferred_to,
+          agentName: data.agent_name,
+          branchId: data.branch_id,
+          branchName: data.branch_name,
         });
         onClose();
       }, 1000);
@@ -182,7 +187,7 @@ export function TransferModal({
                 {currentAgentName || "Não atribuído"}
               </span>
               <span className="rounded-full bg-slate-200/70 px-2.5 py-0.5 text-xs text-slate-700">
-                {currentBranchName || "Matriz"}
+                {currentBranchName || "Unidade"}
               </span>
             </div>
           </div>
@@ -210,8 +215,8 @@ export function TransferModal({
                     className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm font-medium text-slate-800 shadow-sm focus:border-red-600 focus:outline-none focus:ring-2 focus:ring-red-600/20"
                   >
                     <option value="">Selecione o atendente ou gerente</option>
-                    {agents.map((agent) => (
-                      <option key={agent.id} value={agent.id}>
+                    {eligibleAgents.map((agent) => (
+                      <option key={`${agent.id}:${agent.branch_id}`} value={agent.id}>
                         {agent.name} — {agent.role} ({agent.branch_name})
                       </option>
                     ))}
@@ -227,7 +232,10 @@ export function TransferModal({
                   </label>
                   <select
                     value={selectedBranchId}
-                    onChange={(e) => setSelectedBranchId(e.target.value)}
+                    onChange={(e) => {
+                      setSelectedBranchId(e.target.value);
+                      setSelectedAgentId("");
+                    }}
                     className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-sm text-slate-800 shadow-sm focus:border-red-600 focus:outline-none focus:ring-2 focus:ring-red-600/20"
                   >
                     {branchOptions.map((branch) => (

@@ -1,6 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorize } from "@/lib/server-auth";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
+import {
+  chatwootErrorResponse,
+  conversationAccountId,
+  getChatwootConversation,
+} from "@/lib/server/chatwoot";
+
+type InboxMapping = {
+  organization_id: string;
+  branch_id: string;
+  channel: "whatsapp" | "instagram" | "facebook";
+};
+
+function inboxMapping(inboxId: number): InboxMapping | null {
+  try {
+    return JSON.parse(process.env.CHATWOOT_INBOX_MAP || "{}")[String(inboxId)] || null;
+  } catch {
+    return null;
+  }
+}
 
 export async function POST(
   request: NextRequest,
@@ -11,144 +30,72 @@ export async function POST(
   if (!["agent", "manager"].includes(auth.context.role)) {
     return NextResponse.json({ error: "ACCESS_DENIED" }, { status: 403 });
   }
-
-  const id = params.id;
-  if (!/^[1-9]\d*$/.test(id) || !Number.isSafeInteger(Number(id))) {
-    return NextResponse.json(
-      { error: "INVALID_CONVERSATION_ID" },
-      { status: 400 },
-    );
+  if (!/^[1-9]\d*$/.test(params.id) || !Number.isSafeInteger(Number(params.id))) {
+    return NextResponse.json({ error: "INVALID_CONVERSATION_ID" }, { status: 400 });
   }
 
-  const adminToken = process.env.SUPABASE_SECRET_KEY || auth.context.accessToken;
+  let accountId: number;
+  try {
+    accountId = conversationAccountId(request);
+  } catch (error) {
+    const failure = chatwootErrorResponse(error);
+    return NextResponse.json({ error: failure.error }, { status: failure.status });
+  }
 
-  // 1. Verifica se ja existe vinculo
   const existing = await supabaseRest<any[]>("conversation_links", {
     accessToken: auth.context.accessToken,
     params: {
       organization_id: `eq.${auth.context.organizationId}`,
-      chatwoot_conversation_id: `eq.${id}`,
+      chatwoot_account_id: `eq.${accountId}`,
+      chatwoot_conversation_id: `eq.${params.id}`,
       branch_id: `in.(${auth.context.branchIds.join(",")})`,
       select: "*",
     },
   });
-
-  if (existing.data?.length === 1) {
-    return NextResponse.json({
-      linked: true,
-      conversation: existing.data[0],
-    });
+  if (existing.error) {
+    return NextResponse.json({ error: "DATA_UNAVAILABLE" }, { status: 503 });
   }
-
-  // 2. Se nao existir, busca dados no Chatwoot para vincular sob demanda
-  const cwBase = process.env.CHATWOOT_BASE_URL;
-  const cwToken = process.env.CHATWOOT_API_TOKEN;
-  const cwAccount = Number(process.env.CHATWOOT_ACCOUNT_ID || "1");
-
-  if (!cwBase || !cwToken || auth.context.branchIds.length === 0) {
-    return NextResponse.json(
-      { error: "CONVERSATION_NOT_FOUND" },
-      { status: 404 },
-    );
-  }
-
   try {
-    const cwRes = await fetch(
-      `${cwBase}/api/v1/accounts/${cwAccount}/conversations/${id}`,
-      {
-        headers: { api_access_token: cwToken },
-        signal: AbortSignal.timeout(6000),
+    const conversation = await getChatwootConversation(accountId, Number(params.id));
+    const mapping = inboxMapping(conversation.inbox_id);
+    if (!mapping) {
+      return NextResponse.json({ error: "INBOX_CONFIGURATION_REQUIRED" }, { status: 503 });
+    }
+    if (
+      mapping.organization_id !== auth.context.organizationId ||
+      !auth.context.branchIds.includes(mapping.branch_id)
+    ) {
+      return NextResponse.json({ error: "CONVERSATION_SCOPE_DENIED" }, { status: 403 });
+    }
+
+    const sender = conversation.meta?.sender || {};
+    const assignee =
+      conversation.assignee_id ||
+      conversation.assignee?.id ||
+      conversation.meta?.assignee?.id ||
+      null;
+    const synchronized = await supabaseAdminRest<any>("rpc/sync_webhook", {
+      method: "POST",
+      body: {
+        p_org: mapping.organization_id,
+        p_branch: mapping.branch_id,
+        p_account: accountId,
+        p_conv: Number(params.id),
+        p_channel: mapping.channel,
+        p_contact: sender.id == null ? null : String(sender.id),
+        p_name: sender.name || null,
+        p_phone: sender.phone_number || null,
+        p_human: Boolean(assignee),
+        p_key: null,
+        p_assignee: assignee,
       },
-    );
-
-    if (!cwRes.ok) {
-      return NextResponse.json(
-        { error: "CONVERSATION_NOT_FOUND" },
-        { status: 404 },
-      );
+    });
+    if (synchronized.error || !synchronized.data?.id) {
+      return NextResponse.json({ error: "CONVERSATION_LINK_FAILED" }, { status: 503 });
     }
-
-    const cwData = await cwRes.json();
-    const sender = cwData.meta?.sender || cwData.sender || {};
-    const contactName = sender.name || "Cliente WhatsApp";
-    const contactPhone = sender.phone_number || null;
-    const targetBranchId = auth.context.branchIds[0];
-
-    // 2.1 Garante cliente no Supabase
-    let customerId: string | undefined;
-    if (contactPhone) {
-      const findCust = await supabaseRest<any[]>("customers", {
-        accessToken: adminToken,
-        params: {
-          organization_id: `eq.${auth.context.organizationId}`,
-          phone: `eq.${contactPhone}`,
-          select: "id",
-        },
-      });
-      if (findCust.data?.[0]?.id) {
-        customerId = findCust.data[0].id;
-      }
-    }
-
-    if (!customerId) {
-      const newCust = await supabaseRest<any[]>("customers", {
-        accessToken: adminToken,
-        method: "POST",
-        body: {
-          organization_id: auth.context.organizationId,
-          name: contactName,
-          phone: contactPhone,
-        },
-      });
-      if (newCust.data?.[0]?.id) {
-        customerId = newCust.data[0].id;
-        if (contactPhone) {
-          await supabaseRest("customer_channels", {
-            accessToken: adminToken,
-            method: "POST",
-            body: {
-              customer_id: customerId,
-              channel_type: "whatsapp",
-              external_id: contactPhone,
-            },
-          });
-        }
-      }
-    }
-
-    // 2.2 Cria link no Supabase
-    if (customerId && targetBranchId) {
-      const newLink = await supabaseRest<any[]>("conversation_links", {
-        accessToken: adminToken,
-        method: "POST",
-        body: {
-          organization_id: auth.context.organizationId,
-          branch_id: targetBranchId,
-          customer_id: customerId,
-          chatwoot_account_id: cwAccount,
-          chatwoot_conversation_id: Number(id),
-          channel: "whatsapp",
-          status: "open",
-          bot_active: false,
-        },
-      });
-
-      if (newLink.data?.[0]?.id) {
-        return NextResponse.json({
-          linked: true,
-          conversation: newLink.data[0],
-        });
-      }
-    }
-
-    return NextResponse.json(
-      { error: "CONVERSATION_NOT_FOUND" },
-      { status: 404 },
-    );
-  } catch {
-    return NextResponse.json(
-      { error: "DATA_UNAVAILABLE" },
-      { status: 503 },
-    );
+    return NextResponse.json({ linked: true, conversation: synchronized.data });
+  } catch (error) {
+    const failure = chatwootErrorResponse(error);
+    return NextResponse.json({ error: failure.error }, { status: failure.status });
   }
 }

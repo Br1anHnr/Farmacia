@@ -29,7 +29,7 @@ describe("Todas as APIs sensíveis — autenticação, escopo, CSRF e falhas", (
   it.each(handlers)(
     "%s recusa papel forjado sem sessão",
     async (_name, handler, method) => {
-      const req = new NextRequest("http://localhost:3000/api/test", {
+      const req = new NextRequest("http://localhost:3000/api/test?account_id=1", {
         method,
         headers: { "x-user-role": "manager" },
       });
@@ -42,7 +42,7 @@ describe("Todas as APIs sensíveis — autenticação, escopo, CSRF e falhas", (
     "não acessa conversa invisível",
     async (handler) => {
       state.conversation = false;
-      const req = new NextRequest("http://localhost:3000/api/test", {
+      const req = new NextRequest("http://localhost:3000/api/test?account_id=1", {
         headers: { authorization: "Bearer verified" },
       });
       expect((await handler(req, { params: { id: "101" } })).status).toBe(404);
@@ -95,7 +95,7 @@ describe("Todas as APIs sensíveis — autenticação, escopo, CSRF e falhas", (
   });
   it("claim não confirma sucesso quando Chatwoot falha", async () => {
     state.fail = "assignments";
-    const req = new NextRequest("http://localhost:3000/api/test", {
+    const req = new NextRequest("http://localhost:3000/api/test?account_id=1", {
       method: "POST",
       headers: { authorization: "Bearer verified" },
     });

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { authorize } from "@/lib/server-auth";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseRest } from "@/lib/server/supabase";
 
 export interface AuditLogRow {
   id: string;

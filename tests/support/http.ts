@@ -1,7 +1,10 @@
 import { vi } from "vitest";
 export const user = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   org = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-  branch = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+  branch = "cccccccc-cccc-cccc-cccc-cccccccccccc",
+  managerUser = "ffffffff-ffff-ffff-ffff-ffffffffffff",
+  otherAgentUser = "dddddddd-dddd-dddd-dddd-dddddddddddd",
+  otherBranch = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 export function httpFixture(role = "agent") {
   const state = {
     role,
@@ -10,6 +13,8 @@ export function httpFixture(role = "agent") {
     branches: true,
     room: true,
     conversation: true,
+    chatwootAvailable: true,
+    labels: ["vip", "atendente-antigo", "orcamento"],
     calls: [] as Array<{ url: URL; options: any }>,
     sale: {
       id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -33,6 +38,56 @@ export function httpFixture(role = "agent") {
       const url = new URL(String(input));
       state.calls.push({ url, options });
       const endpoint = url.pathname.split("/").pop()!;
+      if (url.hostname === "chatwoot.invalid") {
+        if (!state.chatwootAvailable || endpoint === state.fail)
+          return new Response("{}", { status: 503 });
+        if (url.pathname.endsWith("/conversations/101")) {
+          return new Response(
+            JSON.stringify({
+              id: 101,
+              account_id: 1,
+              inbox_id: 9,
+              meta: { sender: { id: 44, name: "Cliente" } },
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.pathname.includes("/inbox_members/")) {
+          return new Response(
+            JSON.stringify({
+              payload: [
+                { id: 7, account_id: 1, email: "test@example.invalid", confirmed: true },
+                { id: 8, account_id: 1, email: "manager@example.invalid", confirmed: true },
+                { id: 9, account_id: 1, email: "agent2@example.invalid", confirmed: true },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        if (endpoint === "agents") {
+          return new Response(
+            JSON.stringify({
+              payload: [
+                { id: 7, account_id: 1, email: "test@example.invalid", confirmed: true },
+                { id: 8, account_id: 1, email: "manager@example.invalid", confirmed: true },
+                { id: 9, account_id: 1, email: "agent2@example.invalid", confirmed: true },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        if (endpoint === "assignments") {
+          const assignee = JSON.parse(options.body).assignee_id;
+          return new Response(JSON.stringify({ id: assignee, account_id: 1 }), { status: 200 });
+        }
+        if (endpoint === "labels") {
+          if (options.method === "POST") state.labels = JSON.parse(options.body).labels;
+          return new Response(JSON.stringify({ payload: state.labels }), { status: 200 });
+        }
+        if (endpoint === "messages") {
+          return new Response(JSON.stringify({ id: 500 }), { status: 200 });
+        }
+      }
       if (endpoint === state.fail)
         return new Response("{}", {
           status: endpoint === "user" || endpoint === "token" ? 401 : 503,
@@ -57,11 +112,29 @@ export function httpFixture(role = "agent") {
           return new Response(null, { status: 204 });
         case "organization_members":
           data = state.members
-            ? [{ organization_id: org, role: state.role }]
+            ? url.searchParams.has("user_id")
+              ? [{ organization_id: org, user_id: user, role: state.role }]
+              : [
+                  { organization_id: org, user_id: user, role: state.role },
+                  { organization_id: org, user_id: managerUser, role: "manager" },
+                  { organization_id: org, user_id: otherAgentUser, role: "agent" },
+                ]
             : [];
           break;
         case "branch_members":
-          data = state.branches ? [{ branch_id: branch }] : [];
+          data = state.branches
+            ? !url.searchParams.has("user_id")
+              ? [
+                  { user_id: user, branch_id: branch, branches: { name: "Guaratinguetá — Unidade 1" } },
+                  { user_id: managerUser, branch_id: otherBranch, branches: { name: "Potim — Unidade 1" } },
+                  { user_id: otherAgentUser, branch_id: otherBranch, branches: { name: "Potim — Unidade 1" } },
+                ]
+              : url.searchParams.get("user_id") === `eq.${otherAgentUser}`
+              ? [{ user_id: otherAgentUser, branch_id: otherBranch, branches: { name: "Potim — Unidade 1" } }]
+              : url.searchParams.get("user_id") === `eq.${managerUser}`
+              ? [{ user_id: managerUser, branch_id: otherBranch, branches: { name: "Potim — Unidade 1" } }]
+              : [{ user_id: user, branch_id: branch, branches: { name: "Guaratinguetá — Unidade 1" } }]
+            : [];
           break;
         case "internal_rooms":
           data = state.room ? [{ id: branch, branch_id: branch }] : [];
@@ -92,6 +165,27 @@ export function httpFixture(role = "agent") {
               ]
             : [];
           break;
+        case "chatwoot_agents":
+          data = url.searchParams.get("user_id") === `eq.${otherAgentUser}`
+            ? [{ user_id: otherAgentUser, organization_id: org, account_id: 1, agent_id: 9, active: true }]
+            : url.searchParams.get("user_id") === `eq.${managerUser}`
+            ? [{ user_id: managerUser, organization_id: org, account_id: 1, agent_id: 8, active: true }]
+            : [{ user_id: user, organization_id: org, account_id: 1, agent_id: 7, active: true }];
+          break;
+        case "profiles":
+          data = url.searchParams.get("id") === `eq.${otherAgentUser}`
+            ? [{ id: otherAgentUser, full_name: "Atendente Dois", email: "agent2@example.invalid" }]
+            : url.searchParams.get("id") === `eq.${managerUser}`
+            ? [{ id: managerUser, full_name: "Gerente Teste", email: "manager@example.invalid" }]
+            : [
+                { id: user, full_name: "Test User", email: "test@example.invalid" },
+                { id: managerUser, full_name: "Gerente Teste", email: "manager@example.invalid" },
+                { id: otherAgentUser, full_name: "Atendente Dois", email: "agent2@example.invalid" },
+              ];
+          break;
+        case "branches":
+          data = [{ id: branch, name: "Guaratinguetá — Unidade 1" }];
+          break;
         case "record_sale":
           data = state.sale;
           break;
@@ -100,6 +194,18 @@ export function httpFixture(role = "agent") {
           break;
         case "claim_conversation":
           data = { agent_id: 7, account_id: 1, branch_id: branch };
+          break;
+        case "sync_webhook":
+          data = {
+            id: "link",
+            organization_id: org,
+            branch_id: branch,
+            chatwoot_account_id: 1,
+            chatwoot_conversation_id: 101,
+          };
+          break;
+        case "complete_conversation_transfer":
+          data = { transferred: true, user_id: managerUser, branch_id: otherBranch, agent_id: 8 };
           break;
         case "assignments":
           data = { assignee_id: 7 };

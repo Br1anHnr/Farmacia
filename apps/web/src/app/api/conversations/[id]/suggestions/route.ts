@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { conversationAccess } from "@/lib/conversation-access";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseRest } from "@/lib/server/supabase";
 export async function GET(
   request: NextRequest,
   { params }: { params: { id: string } },
@@ -14,6 +14,7 @@ export async function GET(
     accessToken: auth.context.accessToken,
     params: {
       organization_id: "eq." + auth.context.organizationId,
+      chatwoot_account_id: "eq." + auth.accountId,
       chatwoot_conversation_id: "eq." + params.id,
       select: "*",
       order: "created_at.desc",

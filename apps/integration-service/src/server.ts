@@ -6,6 +6,7 @@ import {
   validInternalToken,
   eventDigest,
 } from "./services/webhook-security.js";
+import { adminSupabaseHeaders } from "../../../packages/supabase-http/index.mjs";
 export const app = express();
 app.disable("x-powered-by");
 app.use(
@@ -21,11 +22,9 @@ async function rpc(name: string, body: unknown) {
     throw new Error("PERSISTENCE_UNAVAILABLE");
   const response = await fetch(CONFIG.SUPABASE_URL + "/rest/v1/rpc/" + name, {
     method: "POST",
-    headers: {
-      apikey: CONFIG.SUPABASE_SECRET_KEY,
-      Authorization: "Bearer " + CONFIG.SUPABASE_SECRET_KEY,
+    headers: adminSupabaseHeaders(CONFIG.SUPABASE_SECRET_KEY, {
       "Content-Type": "application/json",
-    },
+    }),
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(10000),
   });
@@ -202,6 +201,7 @@ async function webhook(req: Request, res: Response) {
       );
       await rpc("finish_bot_turn", {
         p_org: mapping.organization_id,
+        p_account: account,
         p_conv: conv.id,
         p_key: key,
         p_handoff: decision.transition_to_human,

@@ -10,7 +10,7 @@ beforeEach(() => {
 
 const key = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
 function request(body: Record<string, unknown>) {
-  return new NextRequest("http://localhost:3000/api/conversations/101/close", {
+  return new NextRequest("http://localhost:3000/api/conversations/101/close?account_id=1", {
     method: "POST",
     headers: {
       authorization: "Bearer verified",
@@ -20,6 +20,7 @@ function request(body: Record<string, unknown>) {
     body: JSON.stringify({
       organization_id: org,
       branch_id: branch,
+      chatwoot_account_id: 1,
       chatwoot_conversation_id: 101,
       channel: "whatsapp",
       ...body,

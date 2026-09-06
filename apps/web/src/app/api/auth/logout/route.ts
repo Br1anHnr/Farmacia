@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkMutationOrigin } from "@/lib/server-auth";
-import { supabaseAuthLogout } from "@/lib/supabase";
+import { supabaseAuthLogout } from "@/lib/server/supabase";
 export async function POST(req: NextRequest) {
   const error = checkMutationOrigin(req, true);
   if (error) return error;

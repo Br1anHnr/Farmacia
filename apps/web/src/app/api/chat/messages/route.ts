@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorize, uuid } from "@/lib/server-auth";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseRest } from "@/lib/server/supabase";
 async function roomAccess(request: NextRequest, room: unknown) {
   const auth = await authorize(request);
   if ("response" in auth) return auth;

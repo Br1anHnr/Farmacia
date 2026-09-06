@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { conversationAccess } from "@/lib/conversation-access";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
 
 export async function GET(
   request: NextRequest,
@@ -71,8 +71,6 @@ export async function POST(
   const url = process.env.CHATWOOT_BASE_URL;
   const token = process.env.CHATWOOT_API_TOKEN;
   const account = auth.conversation.chatwoot_account_id || Number(process.env.CHATWOOT_ACCOUNT_ID || "1");
-  const adminToken = process.env.SUPABASE_SECRET_KEY || auth.context.accessToken;
-
   if (!url || !token) {
     return NextResponse.json(
       { error: "CHATWOOT_CONFIGURATION_REQUIRED" },
@@ -108,8 +106,7 @@ export async function POST(
     const createdMsg = await res.json();
 
     // Registra evento de auditoria no Supabase
-    await supabaseRest("audit_events", {
-      accessToken: adminToken,
+    await supabaseAdminRest("audit_events", {
       method: "POST",
       body: {
         organization_id: auth.context.organizationId,

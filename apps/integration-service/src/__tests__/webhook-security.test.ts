@@ -43,7 +43,7 @@ beforeEach(() => {
       1: { organization_id: org, branch_id: branch, channel: "whatsapp" },
     }),
     SUPABASE_URL: "https://supabase.invalid",
-    SUPABASE_SECRET_KEY: "test",
+    SUPABASE_SECRET_KEY: "sb_secret_test_server_only",
   });
   receipt = new Map();
   calls = [];

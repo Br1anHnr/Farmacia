@@ -1,13 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { CloseConversationInputSchema } from "@hub-farmacia/contracts";
-import { supabaseRest } from "@/lib/supabase";
-import { authorize, uuid } from "@/lib/server-auth";
+import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
+import { uuid } from "@/lib/server-auth";
+import { conversationAccess } from "@/lib/conversation-access";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } },
 ) {
-  const auth = await authorize(request);
+  const auth = await conversationAccess(request, params.id);
   if ("response" in auth) return auth.response;
   if (!["agent", "manager"].includes(auth.context.role))
     return NextResponse.json({ error: "CLOSURE_ACCESS_DENIED" }, { status: 403 });
@@ -41,27 +42,25 @@ export async function POST(
       : parsed.data;
   if (
     input.chatwoot_conversation_id !== conversationId ||
+    input.chatwoot_account_id !== auth.accountId ||
     input.organization_id !== auth.context.organizationId ||
     !auth.context.branchIds.includes(input.branch_id)
   )
     return NextResponse.json({ error: "CLOSURE_ACCESS_DENIED" }, { status: 403 });
 
-  const adminToken = process.env.SUPABASE_SECRET_KEY || auth.context.accessToken;
-
   // Se a conversa for aberta e nao tiver atendente atribuido, atribui ao agente que esta fechando
   if (auth.context.role === "agent") {
     try {
-      const convCheck = await supabaseRest<any[]>("conversation_links", {
-        accessToken: adminToken,
+      const convCheck = await supabaseAdminRest<any[]>("conversation_links", {
         params: {
           organization_id: `eq.${auth.context.organizationId}`,
+          chatwoot_account_id: `eq.${auth.accountId}`,
           chatwoot_conversation_id: `eq.${conversationId}`,
           select: "id,assigned_user_id",
         },
       });
       if (convCheck.data?.[0] && !convCheck.data[0].assigned_user_id) {
-        await supabaseRest("conversation_links", {
-          accessToken: adminToken,
+        await supabaseAdminRest("conversation_links", {
           method: "PATCH",
           params: { id: `eq.${convCheck.data[0].id}` },
           body: { assigned_user_id: auth.context.userId },
@@ -96,7 +95,7 @@ export async function POST(
   // Sincroniza resolucao com Chatwoot se configurado (best-effort)
   const cwBase = process.env.CHATWOOT_BASE_URL;
   const cwToken = process.env.CHATWOOT_API_TOKEN;
-  const cwAccount = Number(process.env.CHATWOOT_ACCOUNT_ID || "1");
+  const cwAccount = auth.accountId;
 
   if (cwBase && cwToken) {
     try {

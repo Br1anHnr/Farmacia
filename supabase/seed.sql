@@ -7,6 +7,7 @@ DECLARE
     v_org_id UUID := '11111111-1111-1111-1111-111111111111';
     v_branch_matriz UUID := '22222222-2222-2222-2222-222222222221';
     v_branch_jardins UUID := '22222222-2222-2222-2222-222222222222';
+    v_branch_potim UUID := '22222222-2222-2222-2222-222222222223';
     v_user_gerente UUID := '33333333-3333-3333-3333-333333333331';
     v_user_ana UUID := '33333333-3333-3333-3333-333333333332';
     v_user_bruno UUID := '33333333-3333-3333-3333-333333333333';
@@ -27,11 +28,7 @@ BEGIN
     ON CONFLICT (id) DO NOTHING;
 
     -- 2. Filiais
-    INSERT INTO public.branches (id, organization_id, name, code, city, is_headquarters)
-    VALUES 
-        (v_branch_matriz, v_org_id, 'MultiFarma Matriz Centro', 'MTZ-01', 'São Paulo', true),
-        (v_branch_jardins, v_org_id, 'MultiFarma Filial Jardins', 'JRD-02', 'São Paulo', false)
-    ON CONFLICT (id) DO NOTHING;
+    PERFORM hub_private.configure_multifarma_branches(v_org_id);
 
     -- 3. Perfis
     INSERT INTO public.profiles (id, full_name, email)
@@ -57,9 +54,11 @@ BEGIN
     INSERT INTO public.branch_members (branch_id, user_id, is_primary)
     VALUES
         (v_branch_matriz, v_user_gerente, true),
+        (v_branch_jardins, v_user_gerente, false),
+        (v_branch_potim, v_user_gerente, false),
         (v_branch_matriz, v_user_ana, true),
         (v_branch_jardins, v_user_bruno, true),
-        (v_branch_matriz, v_user_carla, true),
+        (v_branch_potim, v_user_carla, true),
         (v_branch_matriz, v_user_admin, true)
     ON CONFLICT DO NOTHING;
 

@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { conversationAccess } from "@/lib/conversation-access";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
 import { uuid } from "@/lib/server-auth";
+import {
+  assignChatwootConversation,
+  attendantLabel,
+  chatwootErrorResponse,
+  createChatwootPrivateNote,
+  getChatwootConversation,
+  getChatwootConversationLabels,
+  listChatwootInboxAgents,
+  replaceChatwootConversationLabels,
+} from "@/lib/server/chatwoot";
 
 export async function POST(
   request: NextRequest,
@@ -16,122 +26,102 @@ export async function POST(
   } catch {
     return NextResponse.json({ error: "INVALID_JSON" }, { status: 400 });
   }
-
-  const { target_user_id, target_branch_id, note } = body;
-  if (!target_user_id || !uuid.test(target_user_id)) {
-    return NextResponse.json(
-      { error: "INVALID_TARGET_USER", message: "Colaborador de destino inválido." },
-      { status: 400 },
-    );
+  const { target_user_id: targetUserId, target_branch_id: targetBranchId, note } = body;
+  if (!uuid.test(targetUserId || "")) {
+    return NextResponse.json({ error: "INVALID_TARGET_USER" }, { status: 400 });
+  }
+  if (!uuid.test(targetBranchId || "")) {
+    return NextResponse.json({ error: "INVALID_TARGET_BRANCH" }, { status: 400 });
   }
 
-  // 1. Busca mapeamento Chatwoot do agente destino
-  const agentMapRes = await supabaseRest<any[]>("chatwoot_agents", {
-    accessToken: auth.context.accessToken,
-    params: {
-      user_id: `eq.${target_user_id}`,
-      organization_id: `eq.${auth.context.organizationId}`,
-    },
-  });
-
-  const targetAgentId = agentMapRes.data?.[0]?.agent_id || null;
-
-  // 2. Atualiza atribuicao na tabela conversation_links
-  const updatePayload: Record<string, any> = {
-    assigned_user_id: target_user_id,
-    updated_at: new Date().toISOString(),
-  };
-  if (targetAgentId) {
-    updatePayload.chatwoot_assignee_id = targetAgentId;
-  }
-  if (target_branch_id && uuid.test(target_branch_id)) {
-    updatePayload.branch_id = target_branch_id;
-  }
-
-  const adminToken = process.env.SUPABASE_SECRET_KEY || auth.context.accessToken;
-
-  const updateRes = await supabaseRest<any[]>("conversation_links", {
-    accessToken: adminToken,
-    method: "PATCH",
-    params: {
-      id: `eq.${auth.conversation.id}`,
-    },
-    body: updatePayload,
-  });
-
-  if (updateRes.error) {
-    return NextResponse.json(
-      { error: "TRANSFER_PERSISTENCE_FAILED", message: "Falha ao salvar transferência no banco." },
-      { status: 503 },
-    );
-  }
-
-  // 3. Sincroniza atribuicao no Chatwoot se servico disponivel
-  const cwUrl = process.env.CHATWOOT_BASE_URL;
-  const cwToken = process.env.CHATWOOT_API_TOKEN;
-  const cwAccount = auth.conversation.chatwoot_account_id || Number(process.env.CHATWOOT_ACCOUNT_ID) || 1;
-
-  if (cwUrl && cwToken && targetAgentId) {
-    try {
-      await fetch(
-        `${cwUrl}/api/v1/accounts/${cwAccount}/conversations/${params.id}/assignments`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            api_access_token: cwToken,
-          },
-          body: JSON.stringify({ assignee_id: targetAgentId }),
-          signal: AbortSignal.timeout(6000),
-        },
-      );
-
-      // Se houver nota interna de transferencia, grava como nota privada no Chatwoot
-      if (typeof note === "string" && note.trim()) {
-        await fetch(
-          `${cwUrl}/api/v1/accounts/${cwAccount}/conversations/${params.id}/messages`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              api_access_token: cwToken,
-            },
-            body: JSON.stringify({
-              content: `[Transferência de Atendimento]: ${note.trim()}`,
-              private: true,
-            }),
-            signal: AbortSignal.timeout(6000),
-          },
-        );
-      }
-    } catch {
-      // Nao falha a transferencia se a API externa do Chatwoot estiver temporariamente inacessivel
-    }
-  }
-
-  // 4. Registra trilha de auditoria
-  await supabaseRest("audit_events", {
-    accessToken: adminToken,
-    method: "POST",
-    body: {
-      organization_id: auth.context.organizationId,
-      branch_id: auth.conversation.branch_id || auth.context.branchIds[0],
-      actor_id: auth.context.userId,
-      action: "CONVERSATION_TRANSFERRED",
-      entity_type: "conversation",
-      entity_id: params.id,
-      metadata: {
-        from_user_id: auth.context.userId,
-        to_user_id: target_user_id,
-        target_branch_id: target_branch_id || auth.conversation.branch_id,
-        note: note ? String(note).trim() : null,
+  const [mappingRes, membershipRes, profileRes] = await Promise.all([
+    supabaseAdminRest<any[]>("chatwoot_agents", {
+      params: {
+        organization_id: `eq.${auth.context.organizationId}`,
+        account_id: `eq.${auth.accountId}`,
+        user_id: `eq.${targetUserId}`,
+        active: "eq.true",
+        select: "agent_id",
       },
-    },
-  });
+    }),
+    supabaseAdminRest<any[]>("branch_members", {
+      params: {
+        user_id: `eq.${targetUserId}`,
+        branch_id: `eq.${targetBranchId}`,
+        select: "branch_id,branches!inner(name,organization_id,active)",
+        "branches.organization_id": `eq.${auth.context.organizationId}`,
+        "branches.active": "eq.true",
+      },
+    }),
+    supabaseAdminRest<any[]>("profiles", {
+      params: { id: `eq.${targetUserId}`, select: "full_name" },
+    }),
+  ]);
+  if (mappingRes.error || membershipRes.error || profileRes.error) {
+    return NextResponse.json({ error: "TRANSFER_DATA_UNAVAILABLE" }, { status: 503 });
+  }
+  const targetAgentId = Number(mappingRes.data?.[0]?.agent_id);
+  const targetName = profileRes.data?.[0]?.full_name;
+  if (!Number.isSafeInteger(targetAgentId) || !membershipRes.data?.length || !targetName) {
+    return NextResponse.json({ error: "TARGET_NOT_AUTHORIZED" }, { status: 403 });
+  }
 
-  return NextResponse.json({
-    success: true,
-    transferred_to: target_user_id,
-    branch_id: target_branch_id || auth.conversation.branch_id,
-  });
+  try {
+    const conversation = await getChatwootConversation(auth.accountId, Number(params.id));
+    const enabledAgents = await listChatwootInboxAgents(auth.accountId, conversation.inbox_id);
+    if (!enabledAgents.some((agent) => agent.id === targetAgentId && agent.confirmed !== false)) {
+      return NextResponse.json({ error: "TARGET_NOT_ENABLED_IN_INBOX" }, { status: 403 });
+    }
+
+    const previousLabels = await getChatwootConversationLabels(auth.accountId, Number(params.id));
+    const nextLabels = [
+      ...previousLabels.filter((label) => !label.startsWith("atendente-")),
+      attendantLabel(targetName),
+    ];
+    await assignChatwootConversation(auth.accountId, Number(params.id), targetAgentId);
+    await replaceChatwootConversationLabels(auth.accountId, Number(params.id), nextLabels);
+
+    const completed = await supabaseRest<any>("rpc/complete_conversation_transfer", {
+      accessToken: auth.context.accessToken,
+      method: "POST",
+      body: {
+        p_org: auth.context.organizationId,
+        p_account: auth.accountId,
+        p_conv: Number(params.id),
+        p_target_user: targetUserId,
+        p_target_branch: targetBranchId,
+        p_note: typeof note === "string" && note.trim() ? note.trim() : null,
+      },
+    });
+    if (completed.error || !completed.data?.transferred) {
+      return NextResponse.json({ error: "TRANSFER_PERSISTENCE_FAILED" }, { status: 503 });
+    }
+
+    let note_saved = true;
+    if (typeof note === "string" && note.trim()) {
+      try {
+        await createChatwootPrivateNote(
+          auth.accountId,
+          Number(params.id),
+          `[Transferência de Atendimento]: ${note.trim()}`,
+        );
+      } catch {
+        note_saved = false;
+      }
+    }
+
+    return NextResponse.json({
+      success: true,
+      transferred_to: targetUserId,
+      agent_name: targetName,
+      branch_id: targetBranchId,
+      branch_name: membershipRes.data[0].branches?.name || "Filial",
+      chatwoot_assignee_id: targetAgentId,
+      labels: nextLabels,
+      note_saved,
+    });
+  } catch (error) {
+    const failure = chatwootErrorResponse(error);
+    return NextResponse.json({ error: failure.error }, { status: failure.status });
+  }
 }

@@ -9,6 +9,7 @@ beforeEach(() => {
 const input = () => ({
   organization_id: org,
   branch_id: branch,
+  chatwoot_account_id: 1,
   chatwoot_conversation_id: 101,
   channel: "whatsapp",
   customer_name: "Synthetic",

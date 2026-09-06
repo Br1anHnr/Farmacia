@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorize } from "@/lib/server-auth";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseRest } from "@/lib/server/supabase";
 export async function GET(request: NextRequest) {
   const auth = await authorize(request);
   if ("response" in auth) return auth.response;

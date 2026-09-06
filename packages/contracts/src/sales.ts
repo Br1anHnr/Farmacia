@@ -48,6 +48,7 @@ export type CreateSaleItemInput = z.infer<typeof CreateSaleItemInputSchema>;
 export const CreateSaleInputSchema = z.object({
   organization_id: z.string().uuid(),
   branch_id: z.string().uuid(),
+  chatwoot_account_id: z.number().int().positive(),
   chatwoot_conversation_id: z.number(),
   channel: ChannelTypeSchema,
   customer_name: z.string().min(1),
@@ -76,6 +77,7 @@ export type NoSaleReason = z.infer<typeof NoSaleReasonSchema>;
 const ConversationClosureContextSchema = z.object({
   organization_id: z.string().uuid(),
   branch_id: z.string().uuid(),
+  chatwoot_account_id: z.number().int().positive(),
   chatwoot_conversation_id: z.number().int().positive(),
   channel: ChannelTypeSchema,
 });

@@ -6,6 +6,7 @@ export const org = "11111111-1111-1111-1111-111111111111",
 export const ana = "33333333-3333-3333-3333-333333333332",
   manager = "33333333-3333-3333-3333-333333333331",
   bruno = "33333333-3333-3333-3333-333333333333",
+  carla = "33333333-3333-3333-3333-333333333334",
   admin = "33333333-3333-3333-3333-333333333335";
 export const org2 = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   branch2 = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
@@ -25,7 +26,10 @@ export async function database(dataDir?: string) {
   await db.exec(fs.readFileSync("supabase/seed.sql", "utf8"));
   await db.exec(`UPDATE public.conversation_links SET chatwoot_account_id=1,assigned_user_id='${ana}',chatwoot_assignee_id=7;
  UPDATE public.audit_events SET branch_id='${branch}';
- INSERT INTO public.chatwoot_agents VALUES('${ana}','${org}',1,7),('${manager}','${org}',1,8);
+ INSERT INTO public.chatwoot_agents(user_id,organization_id,account_id,agent_id,email,display_name) VALUES
+ ('${ana}','${org}',1,7,'ana.atendente@multifarma.com','Ana Souza'),
+ ('${manager}','${org}',1,8,'carlos.gerente@multifarma.com','Carlos Mendes'),
+ ('${carla}','${org}',1,9,'carla.atendente@multifarma.com','Carla Prado');
  INSERT INTO public.organizations(id,name,slug) VALUES('${org2}','Other organization','other-org');
  INSERT INTO public.branches(id,organization_id,name,code,city) VALUES('${branch2}','${org2}','Other branch','OTHER','Test');
  INSERT INTO public.profiles(id,full_name,email) VALUES('${user2}','Other manager','other@example.invalid');
@@ -48,6 +52,7 @@ export async function asUser(db: PGlite, id = ana, role = "authenticated") {
 export const saleInput = () => ({
   organization_id: org,
   branch_id: branch,
+  chatwoot_account_id: 1,
   chatwoot_conversation_id: 101,
   channel: "whatsapp",
   customer_name: "Synthetic customer",

@@ -41,10 +41,11 @@ export default function ChatwootWidgetPage() {
 
   // Contexto da conversa
   const [conversationId, setConversationId] = useState<number>(0);
+  const [accountId, setAccountId] = useState<number>(0);
   const [customerName, setCustomerName] = useState<string>("");
   const [customerPhone, setCustomerPhone] = useState<string>("");
   const [channel, setChannel] = useState<string>("whatsapp");
-  const [branchName, setBranchName] = useState<string>("Matriz Centro");
+  const [branchName, setBranchName] = useState<string>("Unidade");
   const [branchId, setBranchId] = useState<string>("");
 
   // Estado de atribuicao
@@ -91,7 +92,11 @@ export default function ChatwootWidgetPage() {
     if (!codeOrMsg) return "";
     const map: Record<string, string> = {
       CONVERSATION_NOT_FOUND:
-        "Conversa não vinculada ao sistema da farmácia. Verifique se o ID está correto.",
+        "Conversa não vinculada ao sistema da farmácia.",
+      CHATWOOT_CONVERSATION_NOT_FOUND: "A conversa não foi encontrada no Chatwoot.",
+      CHATWOOT_REQUEST_FAILED: "O Chatwoot não confirmou a operação.",
+      CHATWOOT_UNAVAILABLE: "O Chatwoot está temporariamente indisponível.",
+      INBOX_CONFIGURATION_REQUIRED: "A inbox desta conversa ainda não está vinculada a uma filial.",
       ACCESS_DENIED: "Acesso negado para este atendimento.",
       ALREADY_ASSIGNED: "Esta conversa já foi assumida por outro atendente.",
       CHATWOOT_CONFIGURATION_REQUIRED:
@@ -132,10 +137,12 @@ export default function ChatwootWidgetPage() {
 
     const params = new URLSearchParams(window.location.search);
     const qConv = params.get("conversation_id") || params.get("id");
+    const qAccount = params.get("account_id");
     const qName = params.get("contact_name") || params.get("name");
     const qPhone = params.get("contact_phone") || params.get("phone");
     const qChannel = params.get("channel");
     if (qConv) setConversationId(parseInt(qConv, 10));
+    if (qAccount) setAccountId(parseInt(qAccount, 10));
     if (qName) setCustomerName(qName);
     if (qPhone) setCustomerPhone(qPhone);
     if (qChannel) setChannel(qChannel.toLowerCase());
@@ -169,9 +176,11 @@ export default function ChatwootWidgetPage() {
           typeof event.data === "string" ? JSON.parse(event.data) : event.data;
         if (data?.event === "chatwoot:ready" || data?.event === "appContext") {
           const conv = data.data?.conversation;
+          const account = data.data?.account;
           const contact = data.data?.contact;
           const inbox = data.data?.inbox || conv?.inbox;
           if (conv?.id) setConversationId(conv.id);
+          if (conv?.account_id || account?.id) setAccountId(conv?.account_id || account.id);
           if (contact?.name) setCustomerName(contact.name);
           if (contact?.phone_number) setCustomerPhone(contact.phone_number);
 
@@ -206,73 +215,66 @@ export default function ChatwootWidgetPage() {
 
   // Busca sugestões e status de atendimento
   useEffect(() => {
-    if (!conversationId) return;
+    if (!conversationId || !accountId) return;
     let active = true;
-
-    // Sugestões de IA
-    fetch(`/api/conversations/${conversationId}/suggestions`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (active && data?.suggestions?.length > 0) {
-          const latest = data.suggestions[data.suggestions.length - 1];
-          setAiSuggestion({
-            product: latest.suggested_product_name || "Medicamento",
-            qty: latest.suggested_quantity || 1,
-            price: latest.suggested_unit_price || 0,
-            fulfillment: latest.suggested_fulfillment || "delivery",
-            address: latest.suggested_address,
-            confidence: latest.confidence || 0.9,
-          });
-        }
-      })
-      .catch(() => {});
-
-    // Garante vínculo e sincronização de contexto com Chatwoot
-    fetch(`/api/conversations/${conversationId}/sync-context`, {
-      method: "POST",
-    })
-      .then(() => {
+    const scopedUrl = (suffix: string) =>
+      `/api/conversations/${conversationId}/${suffix}?account_id=${accountId}`;
+    (async () => {
+      try {
+        const sync = await fetch(scopedUrl("sync-context"), { method: "POST" });
+        const syncData = await sync.json();
+        if (!sync.ok) throw new Error(syncData.error || "CONVERSATION_NOT_FOUND");
+        const [suggestionsRes, claimRes, notesRes] = await Promise.all([
+          fetch(scopedUrl("suggestions")),
+          fetch(scopedUrl("claim")),
+          fetch(scopedUrl("notes")),
+        ]);
         if (!active) return;
-        // Status de Claim
-        return fetch(`/api/conversations/${conversationId}/claim`);
-      })
-      .then((r) => (r && r.ok ? r.json() : null))
-      .then((data) => {
-        if (active && data) {
-          if (data.branch_id) setBranchId(data.branch_id);
-          if (data.branch) setBranchName(data.branch);
-          if (data.is_claimed) {
-            setClaimState({
-              isClaimed: true,
-              claimedBy: data.claimed_by || "Atendente",
-              branch: data.branch || branchName,
+        if (suggestionsRes.ok) {
+          const data = await suggestionsRes.json();
+          if (data?.suggestions?.length > 0) {
+            const latest = data.suggestions[data.suggestions.length - 1];
+            setAiSuggestion({
+              product: latest.suggested_product_name || "Medicamento",
+              qty: latest.suggested_quantity || 1,
+              price: latest.suggested_unit_price || 0,
+              fulfillment: latest.suggested_fulfillment || "delivery",
+              address: latest.suggested_address,
+              confidence: latest.confidence || 0.9,
             });
           }
         }
-      })
-      .catch(() => {});
-
-    // Busca notas internas
-    fetch(`/api/conversations/${conversationId}/notes`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (active && data?.notes) {
-          setNotesList(data.notes);
+        if (claimRes.ok) {
+          const data = await claimRes.json();
+          if (data.branch_id) setBranchId(data.branch_id);
+          if (data.branch) setBranchName(data.branch);
+          setClaimState({
+            isClaimed: Boolean(data.is_claimed),
+            claimedBy: data.claimed_by || "",
+            claimedUserId: data.claimed_user_id,
+            branch: data.branch || branchName,
+          });
         }
-      })
-      .catch(() => {});
+        if (notesRes.ok) {
+          const data = await notesRes.json();
+          setNotesList(data.notes || []);
+        }
+      } catch (error) {
+        if (active) setErrorMsg(error instanceof Error ? error.message : "DATA_UNAVAILABLE");
+      }
+    })();
 
     return () => {
       active = false;
     };
-  }, [conversationId]);
+  }, [accountId, conversationId]);
 
   const handleClaim = async () => {
-    if (!conversationId) return;
+    if (!conversationId || !accountId) return;
     setIsClaiming(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(`/api/conversations/${conversationId}/claim`, {
+      const res = await fetch(`/api/conversations/${conversationId}/claim?account_id=${accountId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -285,6 +287,7 @@ export default function ChatwootWidgetPage() {
         setClaimState({
           isClaimed: true,
           claimedBy: data.claimed_by || currentUser?.full_name || "Você",
+          claimedUserId: data.claimed_user_id || currentUser?.user_id,
           branch: data.branch || branchName,
         });
       } else {
@@ -312,10 +315,10 @@ export default function ChatwootWidgetPage() {
   };
 
   const handleSendInternalNote = async () => {
-    if (!internalNote.trim() || !conversationId) return;
+    if (!internalNote.trim() || !conversationId || !accountId) return;
     setSendingNote(true);
     try {
-      const res = await fetch(`/api/conversations/${conversationId}/notes`, {
+      const res = await fetch(`/api/conversations/${conversationId}/notes?account_id=${accountId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: internalNote.trim() }),
@@ -647,6 +650,7 @@ export default function ChatwootWidgetPage() {
         isOpen={isTransferOpen}
         onClose={() => setIsTransferOpen(false)}
         conversationId={conversationId}
+        accountId={accountId}
         currentAgentName={claimState.claimedBy || "Não atribuído"}
         currentBranchName={claimState.branch || branchName}
         currentBranchId={branchId}
@@ -654,6 +658,7 @@ export default function ChatwootWidgetPage() {
           setClaimState({
             isClaimed: true,
             claimedBy: info.agentName,
+            claimedUserId: info.agentId,
             branch: info.branchName,
           });
           setBranchName(info.branchName);
@@ -665,6 +670,7 @@ export default function ChatwootWidgetPage() {
         isOpen={isClosureOpen}
         onClose={() => setIsClosureOpen(false)}
         conversationId={conversationId}
+        accountId={accountId}
         organizationId={currentUser?.organization_id || ""}
         branchId={branchId || currentUser?.primary_branch_id || currentUser?.branch_ids?.[0] || ""}
         channel={channel}

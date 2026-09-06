@@ -22,6 +22,7 @@ import {
   branch2,
   user2,
   otherBranch,
+  carla,
   room,
 } from "./support/database";
 import fs from "node:fs";
@@ -78,9 +79,11 @@ describe("PostgreSQL local: RLS/grants e transações reais (sem Supabase remoto
   it("gerente respeita filial vinculada; outra organização não aparece", async () => {
     await asUser(db, manager);
     const rows = (await db.query<any>("SELECT * FROM public.sales")).rows;
-    expect(rows.length).toBe(1);
+    expect(rows.length).toBe(2);
     expect(
-      rows.every((r) => r.organization_id === org && r.branch_id === branch),
+      rows.every(
+        (r) => r.organization_id === org && [branch, otherBranch].includes(r.branch_id),
+      ),
     ).toBe(true);
   });
   it("admin técnico não recebe acesso comercial automático", async () => {
@@ -328,15 +331,49 @@ it("claim obtém identidade do banco e não duplica sua auditoria no retry", asy
   );
   await asUser(db);
   const a = await db.query<any>(
-    "SELECT public.claim_conversation($1,303) result",
+    "SELECT public.claim_conversation($1,1,303) result",
     [org],
   );
   const b = await db.query<any>(
-    "SELECT public.claim_conversation($1,303) result",
+    "SELECT public.claim_conversation($1,1,303) result",
     [org],
   );
   expect(a.rows[0].result).toEqual(b.rows[0].result);
   expect(a.rows[0].result.user_id).toBe(ana);
+});
+it("conclui mudança de filial e auditoria na mesma transação após confirmação externa", async () => {
+  await asUser(db, manager);
+  const result = await db.query<any>(
+    "SELECT public.complete_conversation_transfer($1,1,303,$2,$3,$4) result",
+    [org, carla, "22222222-2222-2222-2222-222222222223", "Encaminhado para Potim"],
+  );
+  expect(result.rows[0].result).toMatchObject({
+    transferred: true,
+    user_id: carla,
+    branch_id: "22222222-2222-2222-2222-222222222223",
+  });
+  const audit = await db.query<any>(
+    "SELECT branch_id,metadata FROM public.audit_events WHERE action='CONVERSATION_TRANSFERRED' ORDER BY created_at DESC LIMIT 1",
+  );
+  expect(audit.rows[0].branch_id).toBe("22222222-2222-2222-2222-222222222223");
+  expect(audit.rows[0].metadata.to_user_id).toBe(carla);
+});
+it("permite o mesmo número de conversa em contas Chatwoot distintas e isola a chave composta", async () => {
+  await db.query(
+    "INSERT INTO public.conversation_links(organization_id,branch_id,chatwoot_account_id,chatwoot_conversation_id,channel) VALUES($1,$2,2,303,'instagram')",
+    [org, branch],
+  );
+  const rows = await db.query<any>(
+    "SELECT chatwoot_account_id FROM public.conversation_links WHERE organization_id=$1 AND chatwoot_conversation_id=303 ORDER BY chatwoot_account_id",
+    [org],
+  );
+  expect(rows.rows.map((row) => Number(row.chatwoot_account_id))).toEqual([1, 2]);
+  await expect(
+    db.query(
+      "INSERT INTO public.conversation_links(organization_id,branch_id,chatwoot_account_id,chatwoot_conversation_id,channel) VALUES($1,$2,2,303,'instagram')",
+      [org, branch],
+    ),
+  ).rejects.toMatchObject({ code: "23505" });
 });
 it("chamadas simultâneas com a mesma chave retornam uma única venda (conexão PGlite serializada)", async () => {
   await asUser(db);

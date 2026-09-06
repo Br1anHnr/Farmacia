@@ -44,6 +44,7 @@ interface ClosureModalProps {
   isOpen: boolean;
   onClose: () => void;
   conversationId: number;
+  accountId: number;
   organizationId: string;
   branchId: string;
   channel: string;
@@ -57,6 +58,7 @@ export function ClosureModal({
   isOpen,
   onClose,
   conversationId,
+  accountId,
   organizationId,
   branchId,
   channel,
@@ -195,6 +197,7 @@ export function ClosureModal({
         outcome: "sale",
         organization_id: organizationId,
         branch_id: branchId,
+        chatwoot_account_id: accountId,
         chatwoot_conversation_id: conversationId,
         channel: channel || "whatsapp",
         customer_name: customerName || "Cliente",
@@ -221,6 +224,7 @@ export function ClosureModal({
         outcome: "not_sold",
         organization_id: organizationId,
         branch_id: branchId,
+        chatwoot_account_id: accountId,
         chatwoot_conversation_id: conversationId,
         channel: channel || "whatsapp",
         reason,
@@ -231,20 +235,24 @@ export function ClosureModal({
         outcome,
         organization_id: organizationId,
         branch_id: branchId,
+        chatwoot_account_id: accountId,
         chatwoot_conversation_id: conversationId,
         channel: channel || "whatsapp",
       };
     }
 
     try {
-      const res = await fetch(`/api/conversations/${conversationId}/close`, {
+      const res = await fetch(
+        `/api/conversations/${conversationId}/close?account_id=${accountId}`,
+        {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "idempotency-key": idempotencyKey,
         },
         body: JSON.stringify(payload),
-      });
+        },
+      );
 
       const data = await res.json();
 

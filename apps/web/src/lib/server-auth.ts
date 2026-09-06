@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { supabaseAuthGetUser, supabaseRest } from "./supabase";
+import { supabaseAuthGetUser, supabaseRest } from "./server/supabase";
 export const uuid =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const denied = (status: number, error: string) => ({

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAuthLogin } from "@/lib/supabase";
+import { supabaseAuthLogin } from "@/lib/server/supabase";
 import {
   authorizeToken,
   checkMutationOrigin,

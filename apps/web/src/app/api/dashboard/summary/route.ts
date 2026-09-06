@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { authorize } from "@/lib/server-auth";
 import { type DashboardKPIs } from "@hub-farmacia/contracts";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseRest } from "@/lib/server/supabase";
 
 export async function GET(request: NextRequest) {
   const auth = await authorize(request, true);

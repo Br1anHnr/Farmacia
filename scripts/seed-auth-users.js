@@ -6,6 +6,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { adminSupabaseHeaders } from '../packages/supabase-http/index.mjs';
 
 // Carrega variáveis de ambiente manualmente se dotenv não estiver carregado
 function loadEnv() {
@@ -100,10 +101,7 @@ async function seedAuthUsers() {
   // 1. Busca usuários existentes no auth.users
   const listRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
     method: 'GET',
-    headers: {
-      'apikey': SUPABASE_SECRET_KEY,
-      'Authorization': `Bearer ${SUPABASE_SECRET_KEY}`,
-    },
+    headers: adminSupabaseHeaders(SUPABASE_SECRET_KEY),
   });
 
   if (!listRes.ok) {
@@ -125,11 +123,9 @@ async function seedAuthUsers() {
       console.log(`[Seed Auth] Usuário '${user.email}' já existe (id: ${existing.id}). Atualizando senha e metadados...`);
       const updateRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${existing.id}`, {
         method: 'PUT',
-        headers: {
-          'apikey': SUPABASE_SECRET_KEY,
-          'Authorization': `Bearer ${SUPABASE_SECRET_KEY}`,
+        headers: adminSupabaseHeaders(SUPABASE_SECRET_KEY, {
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify({
           password: user.password,
           email_confirm: true,
@@ -147,11 +143,9 @@ async function seedAuthUsers() {
       console.log(`[Seed Auth] Criando usuário '${user.email}' (role: ${user.user_metadata.role})...`);
       const createRes = await fetch(`${SUPABASE_URL}/auth/v1/admin/users`, {
         method: 'POST',
-        headers: {
-          'apikey': SUPABASE_SECRET_KEY,
-          'Authorization': `Bearer ${SUPABASE_SECRET_KEY}`,
+        headers: adminSupabaseHeaders(SUPABASE_SECRET_KEY, {
           'Content-Type': 'application/json',
-        },
+        }),
         body: JSON.stringify({
           id: user.id,
           email: user.email,

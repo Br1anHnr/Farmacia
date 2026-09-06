@@ -44,6 +44,7 @@ async function close(input: Record<string, unknown>, key = randomUUID()) {
 const context = {
   organization_id: org,
   branch_id: branch,
+  chatwoot_account_id: 1,
   chatwoot_conversation_id: 101,
   channel: "whatsapp",
 };

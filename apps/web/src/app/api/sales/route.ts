@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { CreateSaleInputSchema } from "@hub-farmacia/contracts";
-import { supabaseRest } from "@/lib/supabase";
+import { supabaseRest } from "@/lib/server/supabase";
 import { authorize, uuid } from "@/lib/server-auth";
 export async function POST(request: NextRequest) {
   const auth = await authorize(request);
@@ -25,6 +25,7 @@ export async function POST(request: NextRequest) {
   const { agent_id, agent_name, ...input } = parsed.data;
   if (
     input.organization_id !== auth.context.organizationId ||
+    input.chatwoot_account_id !== Number(process.env.CHATWOOT_ACCOUNT_ID) ||
     !auth.context.branchIds.includes(input.branch_id)
   )
     return NextResponse.json({ error: "SALE_ACCESS_DENIED" }, { status: 403 });
