@@ -5,13 +5,38 @@ import { uuid } from "@/lib/server-auth";
 import {
   assignChatwootConversation,
   attendantLabel,
+  chatwootAssigneeId,
   chatwootErrorResponse,
   createChatwootPrivateNote,
   getChatwootConversation,
   getChatwootConversationLabels,
   listChatwootInboxAgents,
   replaceChatwootConversationLabels,
+  setChatwootConversationAssignee,
 } from "@/lib/server/chatwoot";
+
+async function restoreChatwootState(input: {
+  accountId: number;
+  conversationId: number;
+  assigneeId: number | null;
+  labels: string[];
+}) {
+  try {
+    await setChatwootConversationAssignee(
+      input.accountId,
+      input.conversationId,
+      input.assigneeId,
+    );
+    await replaceChatwootConversationLabels(
+      input.accountId,
+      input.conversationId,
+      input.labels,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export async function POST(
   request: NextRequest,
@@ -21,6 +46,8 @@ export async function POST(
   if ("response" in auth) return auth.response;
 
   let body: any;
+  let previousChatwootState: { assigneeId: number | null; labels: string[] } | null = null;
+  let chatwootMutationStarted = false;
   try {
     body = await request.json();
   } catch {
@@ -68,17 +95,20 @@ export async function POST(
 
   try {
     const conversation = await getChatwootConversation(auth.accountId, Number(params.id));
+    const previousAssigneeId = chatwootAssigneeId(conversation);
     const enabledAgents = await listChatwootInboxAgents(auth.accountId, conversation.inbox_id);
     if (!enabledAgents.some((agent) => agent.id === targetAgentId && agent.confirmed !== false)) {
       return NextResponse.json({ error: "TARGET_NOT_ENABLED_IN_INBOX" }, { status: 403 });
     }
 
     const previousLabels = await getChatwootConversationLabels(auth.accountId, Number(params.id));
+    previousChatwootState = { assigneeId: previousAssigneeId, labels: previousLabels };
     const nextLabels = [
       ...previousLabels.filter((label) => !label.startsWith("atendente-")),
       attendantLabel(targetName),
     ];
     await assignChatwootConversation(auth.accountId, Number(params.id), targetAgentId);
+    chatwootMutationStarted = true;
     await replaceChatwootConversationLabels(auth.accountId, Number(params.id), nextLabels);
 
     const completed = await supabaseRest<any>("rpc/complete_conversation_transfer", {
@@ -94,6 +124,18 @@ export async function POST(
       },
     });
     if (completed.error || !completed.data?.transferred) {
+      const restored = await restoreChatwootState({
+        accountId: auth.accountId,
+        conversationId: Number(params.id),
+        assigneeId: previousAssigneeId,
+        labels: previousLabels,
+      });
+      if (!restored) {
+        return NextResponse.json(
+          { error: "TRANSFER_RECONCILIATION_REQUIRED" },
+          { status: 503 },
+        );
+      }
       return NextResponse.json({ error: "TRANSFER_PERSISTENCE_FAILED" }, { status: 503 });
     }
 
@@ -121,6 +163,19 @@ export async function POST(
       note_saved,
     });
   } catch (error) {
+    if (chatwootMutationStarted && previousChatwootState) {
+      const restored = await restoreChatwootState({
+        accountId: auth.accountId,
+        conversationId: Number(params.id),
+        ...previousChatwootState,
+      });
+      if (!restored) {
+        return NextResponse.json(
+          { error: "TRANSFER_RECONCILIATION_REQUIRED" },
+          { status: 503 },
+        );
+      }
+    }
     const failure = chatwootErrorResponse(error);
     return NextResponse.json({ error: failure.error }, { status: failure.status });
   }

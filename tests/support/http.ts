@@ -14,7 +14,11 @@ export function httpFixture(role = "agent") {
     room: true,
     conversation: true,
     chatwootAvailable: true,
+    chatwootAgentEmailMismatch: false,
+    chatwootAgentsConfirmed: true,
+    chatwootAssignee: null as number | null,
     labels: ["vip", "atendente-antigo", "orcamento"],
+    messages: [] as Array<Record<string, unknown>>,
     calls: [] as Array<{ url: URL; options: any }>,
     sale: {
       id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -47,6 +51,7 @@ export function httpFixture(role = "agent") {
               id: 101,
               account_id: 1,
               inbox_id: 9,
+              assignee_id: state.chatwootAssignee,
               meta: { sender: { id: 44, name: "Cliente" } },
             }),
             { status: 200 },
@@ -56,9 +61,9 @@ export function httpFixture(role = "agent") {
           return new Response(
             JSON.stringify({
               payload: [
-                { id: 7, account_id: 1, email: "test@example.invalid", confirmed: true },
-                { id: 8, account_id: 1, email: "manager@example.invalid", confirmed: true },
-                { id: 9, account_id: 1, email: "agent2@example.invalid", confirmed: true },
+                { id: 7, account_id: 1, email: state.chatwootAgentEmailMismatch ? "operacao@example.invalid" : "test@example.invalid", confirmed: state.chatwootAgentsConfirmed },
+                { id: 8, account_id: 1, email: "manager@example.invalid", confirmed: state.chatwootAgentsConfirmed },
+                { id: 9, account_id: 1, email: "agent2@example.invalid", confirmed: state.chatwootAgentsConfirmed },
               ],
             }),
             { status: 200 },
@@ -68,9 +73,9 @@ export function httpFixture(role = "agent") {
           return new Response(
             JSON.stringify({
               payload: [
-                { id: 7, account_id: 1, email: "test@example.invalid", confirmed: true },
-                { id: 8, account_id: 1, email: "manager@example.invalid", confirmed: true },
-                { id: 9, account_id: 1, email: "agent2@example.invalid", confirmed: true },
+                { id: 7, account_id: 1, email: state.chatwootAgentEmailMismatch ? "operacao@example.invalid" : "test@example.invalid", confirmed: state.chatwootAgentsConfirmed },
+                { id: 8, account_id: 1, email: "manager@example.invalid", confirmed: state.chatwootAgentsConfirmed },
+                { id: 9, account_id: 1, email: "agent2@example.invalid", confirmed: state.chatwootAgentsConfirmed },
               ],
             }),
             { status: 200 },
@@ -78,6 +83,7 @@ export function httpFixture(role = "agent") {
         }
         if (endpoint === "assignments") {
           const assignee = JSON.parse(options.body).assignee_id;
+          state.chatwootAssignee = assignee;
           return new Response(JSON.stringify({ id: assignee, account_id: 1 }), { status: 200 });
         }
         if (endpoint === "labels") {
@@ -137,7 +143,9 @@ export function httpFixture(role = "agent") {
             : [];
           break;
         case "internal_rooms":
-          data = state.room ? [{ id: branch, branch_id: branch }] : [];
+          data = state.room
+            ? [{ id: branch, name: "Sala Geral", branch_id: null, is_general: true, branches: null }]
+            : [];
           break;
         case "internal_messages":
           data =
@@ -149,7 +157,7 @@ export function httpFixture(role = "agent") {
                     created_at: "2026-09-05T00:00:00Z",
                   },
                 ]
-              : [];
+              : state.messages;
           break;
         case "conversation_links":
           data = state.conversation

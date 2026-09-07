@@ -3,9 +3,11 @@ import { conversationAccess } from "@/lib/conversation-access";
 import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
 import {
   assignChatwootConversation,
+  chatwootAssigneeId,
   chatwootErrorResponse,
   getChatwootConversation,
   listChatwootInboxAgents,
+  setChatwootConversationAssignee,
 } from "@/lib/server/chatwoot";
 export async function GET(
   request: NextRequest,
@@ -24,8 +26,7 @@ export async function GET(
   let branchName = "Unidade";
 
   if (auth.conversation.assigned_user_id) {
-    const profileRes = await supabaseRest<any[]>("profiles", {
-      accessToken: auth.context.accessToken,
+    const profileRes = await supabaseAdminRest<any[]>("profiles", {
       params: {
         id: `eq.${auth.conversation.assigned_user_id}`,
         select: "full_name",
@@ -37,8 +38,7 @@ export async function GET(
   }
 
   if (auth.conversation.branch_id) {
-    const branchRes = await supabaseRest<any[]>("branches", {
-      accessToken: auth.context.accessToken,
+    const branchRes = await supabaseAdminRest<any[]>("branches", {
       params: {
         id: `eq.${auth.conversation.branch_id}`,
         select: "name",
@@ -80,6 +80,7 @@ export async function POST(
       return NextResponse.json({ error: "CHATWOOT_MAPPING_REQUIRED" }, { status: 403 });
     }
     const conversation = await getChatwootConversation(auth.accountId, Number(params.id));
+    const previousAssigneeId = chatwootAssigneeId(conversation);
     const enabledAgents = await listChatwootInboxAgents(auth.accountId, conversation.inbox_id);
     if (!enabledAgents.some((agent) => agent.id === agentId && agent.confirmed !== false)) {
       return NextResponse.json({ error: "AGENT_NOT_ENABLED_IN_INBOX" }, { status: 403 });
@@ -96,6 +97,20 @@ export async function POST(
       },
     });
     if (claim.error || !claim.data?.agent_id) {
+      if (previousAssigneeId !== agentId) {
+        try {
+          await setChatwootConversationAssignee(
+            auth.accountId,
+            Number(params.id),
+            previousAssigneeId,
+          );
+        } catch {
+          return NextResponse.json(
+            { error: "CLAIM_RECONCILIATION_REQUIRED" },
+            { status: 503 },
+          );
+        }
+      }
       return NextResponse.json(
         { error: "CLAIM_NOT_PERSISTED" },
         { status: [403, 409].includes(claim.status) ? claim.status : 503 },

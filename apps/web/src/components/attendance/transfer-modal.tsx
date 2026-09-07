@@ -22,6 +22,19 @@ interface TransferModalProps {
   onSuccess: (info: { agentId: string; agentName: string; branchId: string; branchName: string }) => void;
 }
 
+function transferErrorMessage(code: string) {
+  const messages: Record<string, string> = {
+    TARGET_NOT_AUTHORIZED: "O funcionário não está autorizado para esta filial.",
+    TARGET_NOT_ENABLED_IN_INBOX: "O funcionário não está habilitado na inbox desta conversa.",
+    TRANSFER_DATA_UNAVAILABLE: "Os vínculos do funcionário não puderam ser verificados.",
+    TRANSFER_PERSISTENCE_FAILED: "A transferência não foi salva. O responsável anterior foi restaurado.",
+    TRANSFER_RECONCILIATION_REQUIRED: "Chatwoot e Hub precisam ser reconciliados antes de tentar novamente.",
+    CHATWOOT_REQUEST_FAILED: "O Chatwoot não confirmou a transferência.",
+    CHATWOOT_UNAVAILABLE: "O Chatwoot está temporariamente indisponível.",
+  };
+  return messages[code] || code || "Falha ao realizar transferência.";
+}
+
 export function TransferModal({
   isOpen,
   onClose,
@@ -39,6 +52,7 @@ export function TransferModal({
   const [isConfirming, setIsConfirming] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fetchingAgents, setFetchingAgents] = useState(false);
+  const [unmappedCount, setUnmappedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
@@ -49,6 +63,7 @@ export function TransferModal({
       setSuccess(false);
       setNote("");
       setSelectedAgentId("");
+      setUnmappedCount(0);
       return;
     }
 
@@ -65,7 +80,13 @@ export function TransferModal({
         const data = await res.json();
         const loaded = data.agents || [];
         setAgents(loaded);
-        if (!selectedBranchId && loaded[0]?.branch_id) setSelectedBranchId(loaded[0].branch_id);
+        setUnmappedCount(Array.isArray(data.unmapped) ? data.unmapped.length : 0);
+        if (
+          loaded[0]?.branch_id &&
+          !loaded.some((agent: AgentOption) => agent.branch_id === selectedBranchId)
+        ) {
+          setSelectedBranchId(loaded[0].branch_id);
+        }
       } catch (err: any) {
         setError(err.message || "Erro de conexão ao buscar atendentes.");
       } finally {
@@ -112,7 +133,7 @@ export function TransferModal({
       const data = await res.json();
 
       if (!res.ok) {
-        throw new Error(data.message || data.error || "Falha ao realizar transferência.");
+        throw new Error(data.message || transferErrorMessage(data.error));
       }
 
       setSuccess(true);
@@ -205,6 +226,7 @@ export function TransferModal({
                     Carregando atendentes...
                   </div>
                 ) : (
+                  <>
                   <select
                     value={selectedAgentId}
                     onChange={(e) => {
@@ -221,6 +243,17 @@ export function TransferModal({
                       </option>
                     ))}
                   </select>
+                  {eligibleAgents.length === 0 && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      Nenhum funcionário habilitado nesta inbox e filial.
+                    </p>
+                  )}
+                  {unmappedCount > 0 && (
+                    <p className="mt-1 text-xs text-slate-500">
+                      {unmappedCount} agente(s) do Chatwoot ainda precisam de cadastro correspondente no Hub.
+                    </p>
+                  )}
+                  </>
                 )}
               </div>
 

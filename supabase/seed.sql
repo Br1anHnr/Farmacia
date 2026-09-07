@@ -19,8 +19,6 @@ DECLARE
     v_prod_amoxicilina UUID := '55555555-5555-5555-5555-555555555553';
     v_prod_dorflex UUID := '55555555-5555-5555-5555-555555555554';
     v_sale_1 UUID := '66666666-6666-6666-6666-666666666661';
-    v_room_geral UUID := '77777777-7777-7777-7777-777777777771';
-    v_room_jardins UUID := '77777777-7777-7777-7777-777777777772';
 BEGIN
     -- 1. Organização
     INSERT INTO public.organizations (id, name, slug)
@@ -112,15 +110,18 @@ BEGIN
     )
     ON CONFLICT DO NOTHING;
 
-    -- 11. Salas Internas de Chat
-    INSERT INTO public.internal_rooms (id, organization_id, branch_id, name, is_general)
-    VALUES
-        (v_room_geral, v_org_id, NULL, 'Geral MultiFarma', true),
-        (v_room_jardins, v_org_id, v_branch_jardins, 'Equipe Jardins', false)
-    ON CONFLICT (id) DO NOTHING;
+    -- 11. Salas Internas de Chat e membros derivados dos vínculos atuais
+    PERFORM hub_private.ensure_multifarma_internal_rooms(v_org_id);
 
     INSERT INTO public.internal_messages (room_id, sender_id, content)
-    VALUES (v_room_geral, v_user_gerente, 'Boas-vindas à equipe no novo hub integrado!')
-    ON CONFLICT DO NOTHING;
+    SELECT room.id, v_user_gerente, 'Boas-vindas à equipe no novo hub integrado!'
+    FROM public.internal_rooms room
+    WHERE room.organization_id = v_org_id AND room.is_general
+      AND NOT EXISTS (
+        SELECT 1 FROM public.internal_messages message
+        WHERE message.room_id = room.id
+          AND message.sender_id = v_user_gerente
+          AND message.content = 'Boas-vindas à equipe no novo hub integrado!'
+      );
 
 END $$;

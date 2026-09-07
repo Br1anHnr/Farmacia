@@ -9,6 +9,7 @@ import {
   managerUser,
   otherAgentUser,
   otherBranch,
+  user,
 } from "../../../../tests/support/http";
 
 let state: ReturnType<typeof httpFixture>;
@@ -80,6 +81,42 @@ describe("Vínculo Chatwoot e fluxo de atribuição", () => {
       (call) => call.url.pathname.endsWith("/chatwoot_agents") && call.options.method === "POST",
     );
     expect(JSON.parse(write!.options.body)).toHaveLength(3);
+    expect(data.diagnostics).toMatchObject({
+      inbox_agents: 3,
+      account_agents: 3,
+      eligible_agents: 3,
+    });
+    expect(state.calls.some(
+      (call) => call.url.pathname.endsWith("/chatwoot_agents") && call.options.method === "PATCH",
+    )).toBe(true);
+  });
+
+  it("preserva vínculo administrativo validado quando o e-mail do Chatwoot é diferente", async () => {
+    state.chatwootAgentEmailMismatch = true;
+    const response = await agents(
+      request("/api/agents?conversation_id=101&account_id=1"),
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.agents.some((agent: any) => agent.id === user)).toBe(true);
+    const write = state.calls.find(
+      (call) => call.url.pathname.endsWith("/chatwoot_agents") && call.options.method === "POST",
+    );
+    const mapping = JSON.parse(write!.options.body).find((item: any) => item.agent_id === 7);
+    expect(mapping.user_id).toBe(user);
+  });
+
+  it("lista agentes habilitados na inbox mesmo com convite do Chatwoot pendente", async () => {
+    state.chatwootAgentsConfirmed = false;
+    const response = await agents(
+      request("/api/agents?conversation_id=101&account_id=1"),
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.diagnostics.eligible_agents).toBe(3);
+    expect(data.agents.map((agent: any) => agent.id)).toEqual(
+      expect.arrayContaining([user, managerUser, otherAgentUser]),
+    );
   });
 
   it("assume como atendente no Chatwoot antes de persistir no Hub", async () => {
@@ -92,6 +129,18 @@ describe("Vínculo Chatwoot e fluxo de atribuição", () => {
     const rpcIndex = state.calls.findIndex((call) => call.url.pathname.endsWith("/claim_conversation"));
     expect(assignmentIndex).toBeGreaterThan(-1);
     expect(rpcIndex).toBeGreaterThan(assignmentIndex);
+  });
+
+  it("restaura o responsável do Chatwoot quando o claim não persiste no Hub", async () => {
+    state.chatwootAssignee = 8;
+    state.fail = "claim_conversation";
+    const response = await claim(
+      request("/api/conversations/101/claim?account_id=1", {}),
+      { params: { id: "101" } },
+    );
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("CLAIM_NOT_PERSISTED");
+    expect(state.chatwootAssignee).toBe(8);
   });
 
   it.each([
@@ -133,5 +182,21 @@ describe("Vínculo Chatwoot e fluxo de atribuição", () => {
     expect(
       state.calls.some((call) => call.url.pathname.endsWith("/complete_conversation_transfer")),
     ).toBe(false);
+  });
+
+  it("restaura responsável e etiquetas quando a transferência não persiste no Hub", async () => {
+    state.chatwootAssignee = 7;
+    state.fail = "complete_conversation_transfer";
+    const response = await transfer(
+      request("/api/conversations/101/transfer?account_id=1", {
+        target_user_id: otherAgentUser,
+        target_branch_id: otherBranch,
+      }),
+      { params: { id: "101" } },
+    );
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("TRANSFER_PERSISTENCE_FAILED");
+    expect(state.chatwootAssignee).toBe(7);
+    expect(state.labels).toEqual(["vip", "atendente-antigo", "orcamento"]);
   });
 });

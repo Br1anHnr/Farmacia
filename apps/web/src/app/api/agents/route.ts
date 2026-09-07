@@ -19,19 +19,25 @@ export async function GET(request: NextRequest) {
       listChatwootAccountAgents(auth.accountId),
       listChatwootInboxAgents(auth.accountId, conversation.inbox_id),
     ]);
-    const activeAccountAgents = accountAgents
-      .filter((agent) => agent.confirmed !== false && Number.isSafeInteger(agent.id));
+    const activeAccountAgents = accountAgents.filter((agent) => Number.isSafeInteger(agent.id));
 
-    const [membersRes, profilesRes, branchMembersRes] = await Promise.all([
-      supabaseAdminRest<any[]>("organization_members", {
-        params: {
-          organization_id: `eq.${auth.context.organizationId}`,
-          role: "in.(agent,manager)",
-          select: "user_id,role",
-        },
-      }),
+    const membersRes = await supabaseAdminRest<any[]>("organization_members", {
+      params: {
+        organization_id: `eq.${auth.context.organizationId}`,
+        role: "in.(agent,manager)",
+        select: "user_id,role",
+      },
+    });
+    if (membersRes.error) {
+      return NextResponse.json({ error: "AGENTS_UNAVAILABLE" }, { status: 503 });
+    }
+    const memberIds = (membersRes.data || []).map((item) => item.user_id);
+    const [profilesRes, branchMembersRes, existingMappingsRes] = await Promise.all([
       supabaseAdminRest<any[]>("profiles", {
-        params: { select: "id,email,full_name" },
+        params: {
+          id: memberIds.length ? `in.(${memberIds.join(",")})` : "eq.00000000-0000-0000-0000-000000000000",
+          select: "id,email,full_name",
+        },
       }),
       supabaseAdminRest<any[]>("branch_members", {
         params: {
@@ -40,8 +46,15 @@ export async function GET(request: NextRequest) {
           "branches.active": "eq.true",
         },
       }),
+      supabaseAdminRest<any[]>("chatwoot_agents", {
+        params: {
+          organization_id: `eq.${auth.context.organizationId}`,
+          account_id: `eq.${auth.accountId}`,
+          select: "agent_id,user_id",
+        },
+      }),
     ]);
-    if (membersRes.error || profilesRes.error || branchMembersRes.error) {
+    if (profilesRes.error || branchMembersRes.error || existingMappingsRes.error) {
       return NextResponse.json({ error: "AGENTS_UNAVAILABLE" }, { status: 503 });
     }
 
@@ -49,19 +62,42 @@ export async function GET(request: NextRequest) {
     const profiles = new Map(
       (profilesRes.data || []).map((profile) => [String(profile.email).toLowerCase(), profile]),
     );
+    const profilesById = new Map(
+      (profilesRes.data || []).map((profile) => [profile.id, profile]),
+    );
+    const existingUsersByAgent = new Map(
+      (existingMappingsRes.data || []).map((mapping) => [mapping.agent_id, mapping.user_id]),
+    );
     const mappings = activeAccountAgents.map((agent) => {
       const profile = profiles.get(String(agent.email || "").toLowerCase());
+      const existingUserId = existingUsersByAgent.get(agent.id);
       return {
         organization_id: auth.context.organizationId,
         account_id: auth.accountId,
         agent_id: agent.id,
-        user_id: profile && members.has(profile.id) ? profile.id : null,
+        user_id:
+          profile && members.has(profile.id)
+            ? profile.id
+            : existingUserId && members.has(existingUserId)
+              ? existingUserId
+              : null,
         email: String(agent.email || "").toLowerCase(),
         display_name: agent.name || agent.available_name || agent.email,
         active: true,
         last_synced_at: new Date().toISOString(),
       };
     });
+    const deactivated = await supabaseAdminRest("chatwoot_agents", {
+      method: "PATCH",
+      params: {
+        organization_id: `eq.${auth.context.organizationId}`,
+        account_id: `eq.${auth.accountId}`,
+      },
+      body: { active: false, last_synced_at: new Date().toISOString() },
+    });
+    if (deactivated.error) {
+      return NextResponse.json({ error: "AGENT_SYNC_FAILED" }, { status: 503 });
+    }
     if (mappings.length) {
       const saved = await supabaseAdminRest("chatwoot_agents", {
         method: "POST",
@@ -86,7 +122,7 @@ export async function GET(request: NextRequest) {
     const agents = inboxAgents.flatMap((agent) => {
       const mapping = byChatwootId.get(agent.id);
       if (!mapping?.user_id) return [];
-      const profile = profiles.get(mapping.email);
+      const profile = profilesById.get(mapping.user_id);
       return (branchesByUser.get(mapping.user_id) || []).map((branch) => ({
         id: mapping.user_id,
         chatwoot_agent_id: agent.id,
@@ -97,10 +133,28 @@ export async function GET(request: NextRequest) {
       }));
     });
 
+    const profileEmails = new Set(Array.from(profiles.keys()));
+    const membersWithoutProfile = memberIds.filter(
+      (memberId) => !(profilesRes.data || []).some((profile) => profile.id === memberId),
+    );
+    const membersWithoutBranch = memberIds.filter(
+      (memberId) => !(branchesByUser.get(memberId) || []).length,
+    );
+
     return NextResponse.json({
       agents,
       synchronized: mappings.length,
       unmapped: mappings.filter((mapping) => !mapping.user_id).map((mapping) => mapping.email),
+      diagnostics: {
+        inbox_agents: inboxAgents.length,
+        account_agents: activeAccountAgents.length,
+        eligible_agents: new Set(agents.map((agent) => agent.id)).size,
+        chatwoot_emails_without_profile: activeAccountAgents
+          .map((agent) => String(agent.email || "").toLowerCase())
+          .filter((email) => email && !profileEmails.has(email)),
+        members_without_profile: membersWithoutProfile,
+        members_without_branch: membersWithoutBranch,
+      },
       inbox_id: conversation.inbox_id,
     });
   } catch (error) {

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { authorize, uuid } from "@/lib/server-auth";
-import { supabaseRest } from "@/lib/server/supabase";
+import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
 async function roomAccess(request: NextRequest, room: unknown) {
   const auth = await authorize(request);
   if ("response" in auth) return auth;
@@ -14,7 +14,10 @@ async function roomAccess(request: NextRequest, room: unknown) {
   };
   if (uuid.test(room)) params.id = "eq." + room;
   else if (room === "geral") params.is_general = "eq.true";
-  else params.name = "ilike.*" + room + "*";
+  else
+    return {
+      response: NextResponse.json({ error: "INVALID_ROOM" }, { status: 400 }),
+    };
   const rooms = await supabaseRest<any[]>("internal_rooms", {
     accessToken: auth.context.accessToken,
     params,
@@ -55,15 +58,29 @@ export async function GET(request: NextRequest) {
     accessToken: auth.context.accessToken,
     params: {
       room_id: "eq." + auth.roomId,
-      select: "id,sender_id,content,created_at,profiles(full_name)",
+      select: "id,sender_id,content,created_at",
       order: "created_at.desc",
       limit: "100",
     },
   });
   if (res.error)
     return NextResponse.json({ error: "DATA_UNAVAILABLE" }, { status: 503 });
+  const senderIds = Array.from(new Set((res.data || []).map((m) => m.sender_id))).filter(
+    (senderId) => uuid.test(senderId),
+  );
+  const profiles = senderIds.length
+    ? await supabaseAdminRest<any[]>("profiles", {
+        params: {
+          id: `in.(${senderIds.join(",")})`,
+          select: "id,full_name",
+        },
+      })
+    : { data: [], error: null };
+  if (profiles.error)
+    return NextResponse.json({ error: "DATA_UNAVAILABLE" }, { status: 503 });
+  const names = new Map((profiles.data || []).map((profile) => [profile.id, profile.full_name]));
   return NextResponse.json({
-    messages: (res.data || []).reverse().map((m) => format(m)),
+    messages: (res.data || []).reverse().map((m) => format(m, names.get(m.sender_id))),
   });
 }
 export async function POST(request: NextRequest) {

@@ -12,6 +12,15 @@ export type ChatwootConversation = {
   inbox?: { id?: number; name?: string; channel_type?: string };
 };
 
+export function chatwootAssigneeId(conversation: ChatwootConversation) {
+  const value =
+    conversation.assignee_id ??
+    conversation.assignee?.id ??
+    conversation.meta?.assignee?.id ??
+    null;
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
+
 export type ChatwootAgent = {
   id: number;
   account_id: number;
@@ -107,15 +116,24 @@ export async function assignChatwootConversation(
   conversationId: number,
   assigneeId: number,
 ) {
-  const assigned = await request<ChatwootAgent>(
+  return setChatwootConversationAssignee(accountId, conversationId, assigneeId);
+}
+
+export async function setChatwootConversationAssignee(
+  accountId: number,
+  conversationId: number,
+  assigneeId: number | null,
+) {
+  await request<ChatwootAgent | null>(
     accountId,
     `/conversations/${conversationId}/assignments`,
     { method: "POST", body: JSON.stringify({ assignee_id: assigneeId }) },
   );
-  if (assigned.id !== assigneeId) {
+  const confirmed = await getChatwootConversation(accountId, conversationId);
+  if (chatwootAssigneeId(confirmed) !== assigneeId) {
     throw new ChatwootError("CHATWOOT_ASSIGNMENT_NOT_CONFIRMED", 502);
   }
-  return assigned;
+  return confirmed;
 }
 
 export async function getChatwootConversationLabels(

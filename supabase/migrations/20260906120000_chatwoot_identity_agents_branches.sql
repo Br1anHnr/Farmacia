@@ -1,10 +1,35 @@
 BEGIN;
 
--- Chatwoot identity is always account + conversation. The legacy organization
--- constraint is retained for existing RPC compatibility in this increment.
-ALTER TABLE public.conversation_links
-  ADD CONSTRAINT uq_org_chatwoot_account_conversation
-  UNIQUE (organization_id, chatwoot_account_id, chatwoot_conversation_id);
+-- Chatwoot identity is always account + conversation. Some early manual
+-- installations already created the backing unique index, so attach it when
+-- present instead of failing the whole transactional migration.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_constraint constraint_row
+    WHERE constraint_row.conrelid = 'public.conversation_links'::regclass
+      AND constraint_row.conname = 'uq_org_chatwoot_account_conversation'
+  ) THEN
+    NULL;
+  ELSIF EXISTS (
+    SELECT 1
+    FROM pg_catalog.pg_class index_row
+    JOIN pg_catalog.pg_index index_definition ON index_definition.indexrelid = index_row.oid
+    WHERE index_definition.indrelid = 'public.conversation_links'::regclass
+      AND index_row.relname = 'uq_org_chatwoot_account_conversation'
+      AND index_definition.indisunique
+  ) THEN
+    ALTER TABLE public.conversation_links
+      ADD CONSTRAINT uq_org_chatwoot_account_conversation
+      UNIQUE USING INDEX uq_org_chatwoot_account_conversation;
+  ELSE
+    ALTER TABLE public.conversation_links
+      ADD CONSTRAINT uq_org_chatwoot_account_conversation
+      UNIQUE (organization_id, chatwoot_account_id, chatwoot_conversation_id);
+  END IF;
+END
+$$;
 ALTER TABLE public.extraction_suggestions ADD COLUMN chatwoot_account_id bigint;
 UPDATE public.extraction_suggestions suggestion
 SET chatwoot_account_id = link.chatwoot_account_id
@@ -642,20 +667,69 @@ ALTER TABLE public.conversation_links DROP CONSTRAINT uq_org_chatwoot_conv;
 CREATE FUNCTION hub_private.configure_multifarma_branches(p_org uuid)
 RETURNS SETOF public.branches
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = '' AS $$
+DECLARE
+  desired record;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.organizations WHERE id = p_org) THEN
     RAISE EXCEPTION 'ORGANIZATION_NOT_FOUND';
   END IF;
-  INSERT INTO public.branches (id, organization_id, name, code, city, is_headquarters, active)
-  VALUES
-    ('22222222-2222-2222-2222-222222222221', p_org, 'Guaratinguetá — Unidade 1', 'GUA-01', 'Guaratinguetá', true, true),
-    ('22222222-2222-2222-2222-222222222222', p_org, 'Guaratinguetá — Unidade 2', 'GUA-02', 'Guaratinguetá', false, true),
-    ('22222222-2222-2222-2222-222222222223', p_org, 'Potim — Unidade 1', 'POT-01', 'Potim', false, true)
-  ON CONFLICT (organization_id, code) DO UPDATE
-  SET name = EXCLUDED.name,
-      city = EXCLUDED.city,
-      active = true,
-      updated_at = timezone('utc'::text, now());
+
+  IF EXISTS (
+    SELECT 1 FROM public.branches
+    WHERE id IN (
+      '22222222-2222-2222-2222-222222222221',
+      '22222222-2222-2222-2222-222222222222',
+      '22222222-2222-2222-2222-222222222223'
+    ) AND organization_id <> p_org
+  ) THEN
+    RAISE EXCEPTION 'BRANCH_ID_SCOPE_CONFLICT';
+  END IF;
+
+  FOR desired IN
+    SELECT * FROM (VALUES
+      ('22222222-2222-2222-2222-222222222221'::uuid, 'Guaratinguetá — Unidade 1', 'GUA-01', 'Guaratinguetá', true),
+      ('22222222-2222-2222-2222-222222222222'::uuid, 'Guaratinguetá — Unidade 2', 'GUA-02', 'Guaratinguetá', false),
+      ('22222222-2222-2222-2222-222222222223'::uuid, 'Potim — Unidade 1', 'POT-01', 'Potim', false)
+    ) AS configured(id, name, code, city, is_headquarters)
+  LOOP
+    IF EXISTS (
+      SELECT 1 FROM public.branches
+      WHERE organization_id = p_org
+        AND code = desired.code
+        AND id <> desired.id
+    ) THEN
+      RAISE EXCEPTION 'BRANCH_CODE_CONFLICT: %', desired.code;
+    END IF;
+
+    UPDATE public.branches
+    SET name = desired.name,
+        code = desired.code,
+        city = desired.city,
+        is_headquarters = desired.is_headquarters,
+        active = true,
+        updated_at = timezone('utc'::text, now())
+    WHERE id = desired.id AND organization_id = p_org;
+
+    IF NOT FOUND THEN
+      INSERT INTO public.branches (
+        id, organization_id, name, code, city, is_headquarters, active
+      ) VALUES (
+        desired.id, p_org, desired.name, desired.code, desired.city,
+        desired.is_headquarters, true
+      );
+    END IF;
+  END LOOP;
+
+  INSERT INTO public.branch_members (branch_id, user_id, is_primary)
+  SELECT branch.id, member.user_id, false
+  FROM public.branches branch
+  JOIN public.organization_members member
+    ON member.organization_id = branch.organization_id
+   AND member.role = 'manager'
+  WHERE branch.organization_id = p_org
+    AND branch.code IN ('GUA-01', 'GUA-02', 'POT-01')
+  ON CONFLICT (branch_id, user_id) DO NOTHING;
+
   RETURN QUERY
   SELECT * FROM public.branches
   WHERE organization_id = p_org AND code IN ('GUA-01', 'GUA-02', 'POT-01')

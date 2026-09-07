@@ -105,6 +105,16 @@ export default function ChatwootWidgetPage() {
         "Atendimento assumido localmente, mas a sincronização com o Chatwoot está pendente.",
       CHATWOOT_MAPPING_REQUIRED:
         "Seu usuário ainda não possui mapeamento correspondente no Chatwoot.",
+      AGENT_NOT_ENABLED_IN_INBOX:
+        "Seu usuário não está habilitado na inbox desta conversa.",
+      CLAIM_NOT_PERSISTED:
+        "O atendimento não foi salvo no Hub. A atribuição no Chatwoot foi desfeita.",
+      CLAIM_RECONCILIATION_REQUIRED:
+        "Não foi possível manter Chatwoot e Hub sincronizados. Solicite revisão do atendimento.",
+      TRANSFER_PERSISTENCE_FAILED:
+        "A transferência não foi salva no Hub. O responsável anterior foi restaurado.",
+      TRANSFER_RECONCILIATION_REQUIRED:
+        "A transferência ficou pendente de reconciliação entre Chatwoot e Hub.",
       DATA_UNAVAILABLE: "Serviço temporariamente indisponível. Tente novamente em instantes.",
       CLOSURE_ACCESS_DENIED:
         "Você não possui permissão para encerrar este atendimento nesta unidade.",
