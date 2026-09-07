@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { checkMutationOrigin } from "@/lib/server-auth";
 import { supabaseAuthLogout } from "@/lib/server/supabase";
+import { sessionCookieOptions } from "@/lib/server/session-cookie";
 export async function POST(req: NextRequest) {
   const error = checkMutationOrigin(req, true);
   if (error) return error;
@@ -19,11 +20,8 @@ export async function POST(req: NextRequest) {
     "mf_user_id",
   ])
     response.cookies.set(name, "", {
-      path: "/",
+      ...sessionCookieOptions(),
       maxAge: 0,
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
     });
   return response;
 }

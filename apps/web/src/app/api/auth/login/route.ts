@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAuthLogin } from "@/lib/server/supabase";
+import { sessionCookieOptions } from "@/lib/server/session-cookie";
 import {
   authorizeToken,
   checkMutationOrigin,
@@ -41,10 +42,7 @@ export async function POST(req: NextRequest) {
     redirectTo: user.role === "manager" ? "/dashboard" : "/chatwoot-widget",
   });
   const options = {
-    path: "/",
-    httpOnly: true,
-    sameSite: "lax" as const,
-    secure: process.env.NODE_ENV === "production",
+    ...sessionCookieOptions(),
     maxAge: Math.min(Number(result.data.expires_in) || 3600, 3600),
   };
   response.cookies.set("sb_access_token", result.data.access_token, options);

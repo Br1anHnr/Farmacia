@@ -1,10 +1,12 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { middleware } from "../middleware";
 import { POST as login } from "../app/api/auth/login/route";
 import { POST as logout } from "../app/api/auth/logout/route";
 import { GET as me } from "../app/api/auth/me/route";
 import { NextRequest } from "next/server";
 import { httpFixture } from "../../../../tests/support/http";
 let state: ReturnType<typeof httpFixture>;
+afterEach(() => vi.unstubAllEnvs());
 beforeEach(() => {
   state = httpFixture("manager");
 });
@@ -20,6 +22,34 @@ function request(path: string, body: any = {}, cookie = "") {
   });
 }
 describe("Autenticação — HTTP isolado, não homologação GoTrue", () => {
+  it("preserva conversa e conta ao redirecionar uma sessão ausente", async () => {
+    const response = await middleware(new NextRequest("http://localhost:3000/chatwoot-widget?account_id=1&conversation_id=2"));
+    const destination = new URL(response.headers.get("location")!);
+    expect(destination.pathname).toBe("/login");
+    expect(destination.searchParams.get("redirect")).toBe("/chatwoot-widget?account_id=1&conversation_id=2");
+  });
+  it("retorna identidade e conta configurada somente com sessão validada", async () => {
+    const response = await me(new NextRequest("http://localhost:3000/api/auth/me", { headers: { authorization: "Bearer verified" } }));
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    const data = await response.json();
+    expect(data.user.role).toBe("manager");
+    expect(data.chatwoot_account_id).toBe(1);
+    expect((await me(new NextRequest("http://localhost:3000/api/auth/me"))).status).toBe(401);
+  });
+  it("usa cookie seguro no iframe e remove o mesmo cookie na saída", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXT_PUBLIC_CHATWOOT_ORIGIN", "https://chatwoot.invalid");
+    const response = await login(request("/api/auth/login", { email: "test@example.invalid", password: "synthetic" }));
+    const cookie = response.headers.get("set-cookie")!;
+    expect(cookie).toContain("SameSite=none");
+    expect(cookie).toContain("Secure");
+    expect(cookie).toContain("HttpOnly");
+    const signedOut = await logout(request("/api/auth/logout", {}, "sb_access_token=verified"));
+    expect(signedOut.headers.get("set-cookie")).toContain("SameSite=none");
+    expect(signedOut.headers.get("set-cookie")).toContain("Max-Age=0");
+    const foreign = new NextRequest("http://localhost:3000/api/auth/logout", { method: "POST", headers: { origin: "https://chatwoot.invalid", cookie: "sb_access_token=verified" } });
+    expect((await logout(foreign)).status).toBe(403);
+  });
   it.each(["manager", "agent", "admin"])(
     "login %s usa vínculo servidor e cookies HttpOnly",
     async (role) => {

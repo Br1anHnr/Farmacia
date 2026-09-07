@@ -6,5 +6,6 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     authenticated: true,
     user: userContext(auth.context),
-  });
+    chatwoot_account_id: Number(process.env.CHATWOOT_ACCOUNT_ID) || null,
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }

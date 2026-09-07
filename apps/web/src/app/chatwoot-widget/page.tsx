@@ -34,6 +34,9 @@ export default function ChatwootWidgetPage() {
   const router = useRouter();
   const [currentUser, setCurrentUser] = useState<UserContext | null>(null);
   const [isEmbedded, setIsEmbedded] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [signingOut, setSigningOut] = useState(false);
 
   // Modais
   const [isTransferOpen, setIsTransferOpen] = useState(false);
@@ -94,6 +97,7 @@ export default function ChatwootWidgetPage() {
     const map: Record<string, string> = {
       CONVERSATION_NOT_FOUND:
         "Conversa não vinculada ao sistema da farmácia.",
+      UNAUTHENTICATED: "Sua sessão expirou ou não está disponível neste painel. Entre novamente ou abra o painel em outra aba.",
       CHATWOOT_CONVERSATION_NOT_FOUND: "A conversa não foi encontrada no Chatwoot.",
       CONVERSATION_ACCESS_DENIED: "Esta conversa pertence a outro colaborador. Peça ao gerente para transferi-la para você pelo Hub.",
       CHATWOOT_REQUEST_FAILED: "O Chatwoot não confirmou a operação.",
@@ -127,21 +131,38 @@ export default function ChatwootWidgetPage() {
   useEffect(() => {
     setIsEmbedded(window.self !== window.top);
 
-    fetch("/api/auth/me")
+    setAuthLoading(true);
+    fetch("/api/auth/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.user) {
           setCurrentUser(d.user);
-          localStorage.setItem("mf_user_context", JSON.stringify(d.user));
+          if (d.chatwoot_account_id) setAccountId((previous) => previous || d.chatwoot_account_id);
           if (d.user.primary_branch_id) {
             setBranchId(d.user.primary_branch_id);
           } else if (d.user.branch_ids?.[0]) {
             setBranchId(d.user.branch_ids[0]);
           }
-        }
+        } else { setCurrentUser(null); setContextReady(false); }
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => { setCurrentUser(null); setErrorMsg("Não foi possível verificar sua sessão. Tente novamente."); })
+      .finally(() => setAuthLoading(false));
+  }, [reloadKey]);
+
+  const loginUrl = () => "/login?redirect=" + encodeURIComponent(window.location.pathname + window.location.search);
+  const handleLogout = async () => {
+    setSigningOut(true);
+    setContextReady(false);
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("Não foi possível confirmar a saída. Tente novamente.");
+      setCurrentUser(null);
+      try { localStorage.removeItem("mf_user_context"); } catch {}
+      router.push(loginUrl());
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : "Falha ao sair.");
+    } finally { setSigningOut(false); }
+  };
 
   // Handshake com Chatwoot via URL e postMessage
   useEffect(() => {
@@ -227,8 +248,9 @@ export default function ChatwootWidgetPage() {
 
   // Busca sugestões e status de atendimento
   useEffect(() => {
-    if (!conversationId || !accountId) return;
     setContextReady(false);
+    if (!conversationId || !accountId || !currentUser || authLoading) return;
+    setErrorMsg(null);
     let active = true;
     const scopedUrl = (suffix: string) =>
       `/api/conversations/${conversationId}/${suffix}?account_id=${accountId}`;
@@ -268,6 +290,9 @@ export default function ChatwootWidgetPage() {
             branch: data.branch || branchName,
           });
           setContextReady(true);
+        } else {
+          const failure = await claimRes.json();
+          throw new Error(failure.error || "Não foi possível carregar o atendimento. Tente novamente.");
         }
         if (notesRes.ok) {
           const data = await notesRes.json();
@@ -281,7 +306,7 @@ export default function ChatwootWidgetPage() {
     return () => {
       active = false;
     };
-  }, [accountId, conversationId]);
+  }, [accountId, conversationId, currentUser, authLoading, reloadKey]);
 
   const handleClaim = async () => {
     if (!conversationId || !accountId) return;
@@ -365,6 +390,19 @@ export default function ChatwootWidgetPage() {
   // Render do painel compacto de atendimento
   const content = (
     <div className="space-y-4 max-w-4xl mx-auto">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 text-xs">
+        <div>
+          <p className="font-semibold">{authLoading ? "Verificando sessão do Hub..." : currentUser ? currentUser.full_name : "Você não está conectado ao Hub neste painel"}</p>
+          {currentUser && <p className="text-slate-500">{currentUser.email} · {currentUser.role === "manager" ? "Gerente" : currentUser.role === "agent" ? "Atendente" : currentUser.role}</p>}
+          <p className="text-slate-500">Hub: sessão individual · Chatwoot: MultiFarma (operador compartilhado) · conta #{accountId || "não identificada"}</p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          {currentUser ? <button onClick={handleLogout} disabled={signingOut} className="text-red-700 font-semibold">{signingOut ? "Saindo..." : "Sair / trocar colaborador"}</button> : <button onClick={() => router.push(loginUrl())} className="text-red-700 font-semibold">Entrar no Hub</button>}
+          <button onClick={() => setReloadKey((key) => key + 1)} className="text-red-700">Tentar novamente</button>
+          <a href={`/chatwoot-widget?conversation_id=${conversationId}&account_id=${accountId}`} target="_blank" rel="noopener noreferrer" className="text-red-700">Abrir em outra aba</a>
+        </div>
+      </div>
+      {!contextReady && currentUser && <p role="status" className="text-xs text-slate-600">{!conversationId ? "Selecione uma conversa no Chatwoot." : !accountId ? "Identificação da conta Chatwoot indisponível. Verifique a configuração da integração." : errorMsg ? "Ações indisponíveis até recarregar o atendimento com sucesso." : "Carregando atendimento..."}</p>}
       {/* Alerta de erro formatado e amigável */}
       {errorMsg && (
         <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-800 animate-in fade-in">
@@ -629,7 +667,7 @@ export default function ChatwootWidgetPage() {
                 <button
                   type="button"
                   onClick={handleSendInternalNote}
-                  disabled={!internalNote.trim() || sendingNote}
+                  disabled={!internalNote.trim() || sendingNote || !contextReady}
                   className="ml-auto flex items-center gap-1.5 rounded-xl bg-slate-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-900 disabled:opacity-50 transition-colors"
                 >
                   <Send className="h-3 w-3" />

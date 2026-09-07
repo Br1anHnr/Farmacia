@@ -34,7 +34,7 @@ export function LoginForm({ demoMode }: { demoMode: boolean }) {
         setError(data.message || "Não foi possível entrar. Confira seus dados.");
         return;
       }
-      if (data.user) localStorage.setItem("mf_user_context", JSON.stringify(data.user));
+      try { if (data.user) localStorage.setItem("mf_user_context", JSON.stringify(data.user)); } catch {}
       router.push(searchParams.get("redirect") || data.redirectTo || "/dashboard");
     } catch {
       setError("Não foi possível conectar ao sistema. Tente novamente.");
@@ -105,6 +105,9 @@ export function LoginForm({ demoMode }: { demoMode: boolean }) {
             {!loading && <ArrowRight className="h-4 w-4" />}
           </button>
         </form>
+        <p className="text-xs text-slate-500">
+          Se o navegador bloquear o acesso dentro do Chatwoot, <a href={"/login?redirect=" + encodeURIComponent(searchParams.get("redirect") || "/chatwoot-widget")} target="_blank" rel="noopener noreferrer" className="font-semibold text-red-700">abra o Hub em outra aba</a>.
+        </p>
 
         {demoMode && (
           <div className="border-t border-slate-200 pt-5">

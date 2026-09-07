@@ -13,7 +13,7 @@ export async function middleware(request: NextRequest) {
       result.response.status === 401 ? "/login" : "/access-denied",
       request.url,
     );
-    url.searchParams.set("redirect", path);
+    url.searchParams.set("redirect", path + request.nextUrl.search);
     return NextResponse.redirect(url);
   }
   return NextResponse.next();
