@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
+import { submissionKey } from "@/lib/submission-key";
 import {
   CheckCircle2,
   XCircle,
@@ -90,6 +91,7 @@ export function ClosureModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const submission = useRef(submissionKey());
 
   useEffect(() => {
     if (!isOpen) {
@@ -185,7 +187,6 @@ export function ClosureModal({
     setLoading(true);
 
     let payload: any;
-    const idempotencyKey = crypto.randomUUID();
 
     if (outcome === "sale") {
       if (items.length === 0) {
@@ -248,7 +249,7 @@ export function ClosureModal({
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "idempotency-key": idempotencyKey,
+          "idempotency-key": submission.current.forPayload(payload),
         },
         body: JSON.stringify(payload),
         },

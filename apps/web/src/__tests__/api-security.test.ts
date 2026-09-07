@@ -99,6 +99,8 @@ describe("Todas as APIs sensíveis — autenticação, escopo, CSRF e falhas", (
       method: "POST",
       headers: { authorization: "Bearer verified" },
     });
-    expect((await claimPost(req, { params: { id: "101" } })).status).toBe(502);
+    const response = await claimPost(req, { params: { id: "101" } });
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("CLAIM_RECONCILIATION_REQUIRED");
   });
 });

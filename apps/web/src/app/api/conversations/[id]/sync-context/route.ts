@@ -103,7 +103,7 @@ export async function POST(
     if (visible.data?.length !== 1) {
       return NextResponse.json({ error: "CONVERSATION_ACCESS_DENIED" }, { status: 403 });
     }
-    return NextResponse.json({ linked: true, conversation: visible.data[0] });
+    return NextResponse.json({ linked: true, conversation: visible.data[0], labels: conversation.labels || [], contact: { name: sender.name || null, phone: sender.phone_number || null } });
   } catch (error) {
     const failure = chatwootErrorResponse(error);
     return NextResponse.json({ error: failure.error }, { status: failure.status });

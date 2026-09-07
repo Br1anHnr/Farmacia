@@ -19,11 +19,12 @@ interface TransferModalProps {
   currentAgentName: string;
   currentBranchName: string;
   currentBranchId: string;
-  onSuccess: (info: { agentId: string; agentName: string; branchId: string; branchName: string }) => void;
+  onSuccess: (info: { agentId: string; agentName: string; branchId: string; branchName: string; labels: string[] }) => void;
 }
 
 function transferErrorMessage(code: string) {
   const messages: Record<string, string> = {
+    INDIVIDUAL_AGENT_MODE_REQUIRED: "O Hub exige agentes individuais do Chatwoot. Desative a configuração de operador compartilhado no Supabase antes de transferir.",
     SHARED_OPERATOR_NOT_ENABLED: "O usuário MultiFarma precisa estar habilitado nesta caixa de entrada.",
     OPERATION_CONFIGURATION_UNAVAILABLE: "Não foi possível carregar a configuração do atendimento. Tente novamente.",
     TARGET_NOT_AUTHORIZED: "O funcionário não está autorizado para esta filial.",
@@ -48,6 +49,7 @@ export function TransferModal({
   onSuccess,
 }: TransferModalProps) {
   const [agents, setAgents] = useState<AgentOption[]>([]);
+  const [configurationWarnings, setConfigurationWarnings] = useState<string[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selectedBranchId, setSelectedBranchId] = useState(currentBranchId);
   const [note, setNote] = useState("");
@@ -71,16 +73,20 @@ export function TransferModal({
 
     async function loadAgents() {
       setFetchingAgents(true);
+      setAgents([]);
+      setSelectedAgentId("");
+      setConfigurationWarnings([]);
       setError(null);
       try {
         const res = await fetch(
           `/api/agents?conversation_id=${conversationId}&account_id=${accountId}`,
         );
-        if (!res.ok) {
-          throw new Error("Não foi possível carregar a lista de colaboradores.");
-        }
         const data = await res.json();
+        if (!res.ok) {
+          throw new Error(transferErrorMessage(data.error));
+        }
         const loaded = data.agents || [];
+        setConfigurationWarnings((data.configuration_required || []).map((item: { message: string }) => item.message));
         setAgents(loaded);
         setUnmappedCount(Array.isArray(data.unmapped) ? data.unmapped.length : 0);
         if (
@@ -134,18 +140,19 @@ export function TransferModal({
 
       const data = await res.json();
 
-      if (!res.ok) {
+      if (!res.ok || data.success !== true) {
         throw new Error(data.message || transferErrorMessage(data.error));
       }
 
       setSuccess(true);
-      setTimeout(() => {
-        onSuccess({
+      onSuccess({
           agentId: data.transferred_to,
           agentName: data.agent_name,
           branchId: data.branch_id,
           branchName: data.branch_name,
-        });
+          labels: data.labels || [],
+      });
+      setTimeout(() => {
         onClose();
       }, 1000);
     } catch (err: any) {
@@ -182,6 +189,7 @@ export function TransferModal({
 
         {/* Body */}
         <div className="space-y-4 p-6">
+          {configurationWarnings.map((message) => <p key={message} className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900">{message}</p>)}
           {error && (
             <div className="flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
               <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600" />

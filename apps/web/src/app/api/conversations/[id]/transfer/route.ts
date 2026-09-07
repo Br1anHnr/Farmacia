@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { conversationAccess } from "@/lib/conversation-access";
 import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
 import { uuid } from "@/lib/server-auth";
-import { sharedOperator } from "@/lib/server/shared-operator";
+import { requireIndividualAssignment } from "@/lib/server/shared-operator";
 import {
   assignChatwootConversation,
   attendantLabel,
@@ -88,13 +88,12 @@ export async function POST(
   if (mappingRes.error || membershipRes.error || profileRes.error) {
     return NextResponse.json({ error: "TRANSFER_DATA_UNAVAILABLE" }, { status: 503 });
   }
-  let sharedAgentId: number | null;
-  try { sharedAgentId = await sharedOperator(auth.context, auth.accountId); }
+  try { await requireIndividualAssignment(auth.context, auth.accountId); }
   catch (error) {
     const failure = chatwootErrorResponse(error);
     return NextResponse.json({ error: failure.error }, { status: failure.status });
   }
-  const targetAgentId = sharedAgentId ?? Number(mappingRes.data?.[0]?.agent_id);
+  const targetAgentId = Number(mappingRes.data?.[0]?.agent_id);
   const targetName = profileRes.data?.[0]?.full_name;
   if (!Number.isSafeInteger(targetAgentId) || !membershipRes.data?.length || !targetName) {
     return NextResponse.json({ error: "TARGET_NOT_AUTHORIZED" }, { status: 403 });
@@ -104,8 +103,8 @@ export async function POST(
     const conversation = await getChatwootConversation(auth.accountId, Number(params.id));
     const previousAssigneeId = chatwootAssigneeId(conversation);
     const enabledAgents = await listChatwootInboxAgents(auth.accountId, conversation.inbox_id);
-    if (!enabledAgents.some((agent) => agent.id === targetAgentId && agent.confirmed !== false)) {
-      return NextResponse.json({ error: "TARGET_NOT_ENABLED_IN_INBOX" }, { status: 403 });
+    if (!enabledAgents.some((agent) => agent.id === targetAgentId)) {
+      return NextResponse.json({ error: "TARGET_NOT_ENABLED_IN_INBOX", message: `${targetName} não está na inbox #${conversation.inbox_id}. No Chatwoot, abra Configurações → Caixas de entrada → Agentes, adicione o funcionário e clique em Atualizar.` }, { status: 403 });
     }
 
     const previousLabels = await getChatwootConversationLabels(auth.accountId, Number(params.id));
@@ -114,8 +113,8 @@ export async function POST(
       ...previousLabels.filter((label) => !label.startsWith("atendente-")),
       attendantLabel(targetName),
     ];
-    await assignChatwootConversation(auth.accountId, Number(params.id), targetAgentId);
     chatwootMutationStarted = true;
+    await assignChatwootConversation(auth.accountId, Number(params.id), targetAgentId);
     await replaceChatwootConversationLabels(auth.accountId, Number(params.id), nextLabels);
 
     const completed = await supabaseRest<any>("rpc/complete_conversation_transfer", {

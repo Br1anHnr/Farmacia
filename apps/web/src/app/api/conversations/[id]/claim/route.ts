@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { conversationAccess } from "@/lib/conversation-access";
 import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
-import { sharedOperator } from "@/lib/server/shared-operator";
+import { requireIndividualAssignment } from "@/lib/server/shared-operator";
 import {
   assignChatwootConversation,
   attendantLabel,
@@ -73,14 +73,15 @@ export async function POST(
         select: "agent_id",
       },
     });
-    const agentId = (await sharedOperator(auth.context, auth.accountId)) ?? Number(mapping.data?.[0]?.agent_id);
+    await requireIndividualAssignment(auth.context, auth.accountId);
+    const agentId = Number(mapping.data?.[0]?.agent_id);
     if (mapping.error || !Number.isSafeInteger(agentId)) {
       return NextResponse.json({ error: "CHATWOOT_MAPPING_REQUIRED" }, { status: 403 });
     }
     const conversation = await getChatwootConversation(auth.accountId, Number(params.id));
     const previousAssigneeId = chatwootAssigneeId(conversation);
     const enabledAgents = await listChatwootInboxAgents(auth.accountId, conversation.inbox_id);
-    if (!enabledAgents.some((agent) => agent.id === agentId && agent.confirmed !== false)) {
+    if (!enabledAgents.some((agent) => agent.id === agentId)) {
       return NextResponse.json({ error: "AGENT_NOT_ENABLED_IN_INBOX" }, { status: 403 });
     }
     const previousLabels = await getChatwootConversationLabels(auth.accountId, Number(params.id));
@@ -150,6 +151,7 @@ export async function POST(
       claimed_user_id: auth.context.userId,
       branch: branchName,
       branch_id: claim.data.branch_id,
+      labels: nextLabels,
     });
   } catch (error) {
     const failure = chatwootErrorResponse(error);

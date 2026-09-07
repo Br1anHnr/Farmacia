@@ -95,6 +95,9 @@ export async function POST(request: NextRequest) {
   }
   const auth = await roomAccess(request, body.room || "geral");
   if ("response" in auth) return auth.response;
+  if (body.message_id !== undefined && (typeof body.message_id !== "string" || !uuid.test(body.message_id))) {
+    return NextResponse.json({ error: "INVALID_MESSAGE_ID" }, { status: 400 });
+  }
   if (
     typeof body.content !== "string" ||
     !body.content.trim() ||
@@ -104,12 +107,28 @@ export async function POST(request: NextRequest) {
   const res = await supabaseRest<any[]>("internal_messages", {
     accessToken: auth.context.accessToken,
     method: "POST",
+    ...(body.message_id ? {
+      params: { on_conflict: "id" },
+      headers: { Prefer: "resolution=ignore-duplicates,return=representation" },
+    } : {}),
     body: {
+      ...(body.message_id ? { id: body.message_id } : {}),
       room_id: auth.roomId,
       sender_id: auth.context.userId,
       content: body.content.trim(),
     },
   });
+  if (!res.error && body.message_id && !res.data?.length) {
+    const existing = await supabaseRest<any[]>("internal_messages", {
+      accessToken: auth.context.accessToken,
+      params: { id: `eq.${body.message_id}`, room_id: `eq.${auth.roomId}`, sender_id: `eq.${auth.context.userId}`, select: "id,room_id,sender_id,content,created_at" },
+    });
+    if (existing.error) return NextResponse.json({ error: "MESSAGE_NOT_PERSISTED" }, { status: 503 });
+    if (existing.data?.length !== 1 || existing.data[0].content !== body.content.trim()) {
+      return NextResponse.json({ error: "MESSAGE_ID_CONFLICT" }, { status: 409 });
+    }
+    return NextResponse.json({ message: format(existing.data[0], auth.context.fullName), replayed: true });
+  }
   if (res.error || !res.data?.[0]?.id)
     return NextResponse.json(
       { error: "MESSAGE_NOT_PERSISTED" },

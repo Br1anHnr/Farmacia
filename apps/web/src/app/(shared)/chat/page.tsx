@@ -4,6 +4,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { AlertCircle, Building2, Hash, Loader2, MessagesSquare, Send, Users } from "lucide-react";
 import { type UserContext } from "@/lib/auth-store";
 import { HubShell } from "@/components/layout/hub-shell";
+import { submissionKey } from "@/lib/submission-key";
 
 interface Room {
   id: string;
@@ -34,6 +35,7 @@ export default function InternalChatPage() {
   const roomRef = useRef(selectedRoomId);
   roomRef.current = selectedRoomId;
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const submission = useRef(submissionKey());
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) || null;
 
   useEffect(() => {
@@ -47,7 +49,7 @@ export default function InternalChatPage() {
       .then(([authData, roomsData]) => {
         if (authData?.user) {
           setCurrentUser(authData.user);
-          localStorage.setItem("mf_user_context", JSON.stringify(authData.user));
+          try { localStorage.setItem("mf_user_context", JSON.stringify(authData.user)); } catch {}
         }
         const availableRooms: Room[] = roomsData?.rooms || [];
         setRooms(availableRooms);
@@ -101,10 +103,11 @@ export default function InternalChatPage() {
       const response = await fetch("/api/chat/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room: selectedRoomId, content }),
+        body: JSON.stringify({ room: selectedRoomId, content, message_id: submission.current.forPayload({ user: currentUser.user_id, room: selectedRoomId, content }) }),
       });
       const data = await response.json();
       if (!response.ok || !data.message?.id) throw new Error("MESSAGE_NOT_PERSISTED");
+      submission.current.reset();
       setInputText("");
       await fetchMessages(selectedRoomId);
     } catch {

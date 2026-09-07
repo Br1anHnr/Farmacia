@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { conversationAccess } from "@/lib/conversation-access";
 import { supabaseAdminRest } from "@/lib/server/supabase";
-import { sharedOperator } from "@/lib/server/shared-operator";
+import { requireIndividualAssignment } from "@/lib/server/shared-operator";
 import {
   chatwootErrorResponse,
   getChatwootConversation,
@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const conversation = await getChatwootConversation(auth.accountId, Number(conversationId));
-    const sharedAgentId = await sharedOperator(auth.context, auth.accountId);
+    await requireIndividualAssignment(auth.context, auth.accountId);
     const [accountAgents, inboxAgents] = await Promise.all([
       listChatwootAccountAgents(auth.accountId),
       listChatwootInboxAgents(auth.accountId, conversation.inbox_id),
@@ -61,19 +61,6 @@ export async function GET(request: NextRequest) {
     }
 
     const members = new Map((membersRes.data || []).map((item) => [item.user_id, item.role]));
-    if (sharedAgentId !== null) {
-      if (!inboxAgents.some((agent) => agent.id === sharedAgentId && agent.confirmed !== false)) {
-        return NextResponse.json({ error: "SHARED_OPERATOR_NOT_ENABLED" }, { status: 403 });
-      }
-      const agents = (branchMembersRes.data || []).flatMap((membership) => {
-        const profile = (profilesRes.data || []).find((item) => item.id === membership.user_id);
-        if (!profile || !members.has(profile.id)) return [];
-        return [{ id: profile.id, name: profile.full_name,
-          role: members.get(profile.id) === "manager" ? "Gerente" : "Atendente",
-          branch_id: membership.branch_id, branch_name: membership.branches?.name || "Filial" }];
-      });
-      return NextResponse.json({ agents, shared_operator: true, inbox_id: conversation.inbox_id });
-    }
     const profiles = new Map(
       (profilesRes.data || []).map((profile) => [String(profile.email).toLowerCase(), profile]),
     );
@@ -158,6 +145,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       agents,
+      configuration_required: mappings.filter((mapping) => mapping.user_id && !inboxAgents.some((agent) => agent.id === mapping.agent_id)).map((mapping) => ({
+        name: mapping.display_name,
+        message: `No Chatwoot, abra Configurações → Caixas de entrada → inbox #${conversation.inbox_id} → Agentes, adicione ${mapping.display_name} e clique em Atualizar.`,
+      })),
       synchronized: mappings.length,
       unmapped: mappings.filter((mapping) => !mapping.user_id).map((mapping) => mapping.email),
       diagnostics: {

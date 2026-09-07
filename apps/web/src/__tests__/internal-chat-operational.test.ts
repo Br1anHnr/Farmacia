@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { GET as rooms } from "../app/api/chat/rooms/route";
 import { GET as messages } from "../app/api/chat/messages/route";
-import { httpFixture, user } from "../../../../tests/support/http";
+import { httpFixture, user, branch } from "../../../../tests/support/http";
 
 let state: ReturnType<typeof httpFixture>;
 beforeEach(() => {
@@ -29,6 +29,7 @@ describe("Chat interno operacional", () => {
   it("resolve o nome do remetente no servidor depois de validar a sala", async () => {
     state.messages = [{
       id: "message-1",
+      room_id: branch,
       sender_id: user,
       content: "Olá equipe",
       created_at: "2026-09-05T19:21:00Z",

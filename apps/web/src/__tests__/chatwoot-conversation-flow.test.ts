@@ -29,25 +29,58 @@ function request(path: string, body?: unknown) {
 }
 
 describe("Vínculo Chatwoot e fluxo de atribuição", () => {
-  it("usa o operador compartilhado e etiqueta o responsável do Hub", async () => {
-    state.sharedAgentId = 7;
-    const listed = await agents(request("/api/agents?conversation_id=101&account_id=1"));
-    expect((await listed.json()).agents.map((item: any) => item.id)).toContain(otherAgentUser);
+  it("lista e transfere para participante com convite pendente sem confundir confirmação com inbox", async () => {
+    state.chatwootAgentsConfirmed = false;
     const response = await transfer(request("/api/conversations/101/transfer?account_id=1", {
       target_user_id: otherAgentUser, target_branch_id: otherBranch,
     }), { params: { id: "101" } });
     expect(response.status).toBe(200);
-    expect(state.chatwootAssignee).toBe(7);
-    expect(state.labels).toEqual(expect.arrayContaining(["vip", "orcamento", "atendente-atendente-dois"]));
-    expect(state.labels).not.toContain("atendente-antigo");
+    expect(state.chatwootAssignee).toBe(9);
   });
-
-  it("assume com operador compartilhado e preserva etiquetas comerciais", async () => {
-    state.sharedAgentId = 8;
+  it("omite agente removido e rejeita envio direto antes de qualquer atribuição", async () => {
+    state.inboxAgentIds = [7, 8];
+    const listed = await agents(request("/api/agents?conversation_id=101&account_id=1"));
+    const data = await listed.json();
+    expect(data.agents.some((agent: any) => agent.id === otherAgentUser)).toBe(false);
+    expect(data.configuration_required[0].message).toContain("inbox #9");
+    const response = await transfer(request("/api/conversations/101/transfer?account_id=1", {
+      target_user_id: otherAgentUser, target_branch_id: otherBranch,
+    }), { params: { id: "101" } });
+    expect(response.status).toBe(403);
+    expect((await response.json()).message).toContain("Chatwoot");
+    expect(state.calls.some((call) => call.url.pathname.endsWith("/assignments"))).toBe(false);
+  });
+  it("não persiste quando assignment retorna 200 mas o responsável não mudou", async () => {
+    state.assignmentConfirmed = false;
+    const response = await transfer(request("/api/conversations/101/transfer?account_id=1", {
+      target_user_id: otherAgentUser, target_branch_id: otherBranch,
+    }), { params: { id: "101" } });
+    expect(response.status).toBe(502);
+    expect((await response.json()).error).toBe("CHATWOOT_ASSIGNMENT_NOT_CONFIRMED");
+    expect(state.calls.some((call) => call.url.pathname.endsWith("/complete_conversation_transfer"))).toBe(false);
+  });
+  it.each(["agent", "manager"])("assume com perfil %s e convite pendente quando é membro da inbox", async (role) => {
+    state.role = role;
+    state.chatwootAgentsConfirmed = false;
     const response = await claim(request("/api/conversations/101/claim?account_id=1", {}), { params: { id: "101" } });
     expect(response.status).toBe(200);
-    expect(state.chatwootAssignee).toBe(8);
-    expect(state.labels).toEqual(expect.arrayContaining(["vip", "orcamento", "atendente-test-user"]));
+  });
+  it("recusa modo compartilhado para não desviar do destino real do Chatwoot", async () => {
+    state.sharedAgentId = 7;
+    const listed = await agents(request("/api/agents?conversation_id=101&account_id=1"));
+    expect(listed.status).toBe(409);
+    const response = await transfer(request("/api/conversations/101/transfer?account_id=1", {
+      target_user_id: otherAgentUser, target_branch_id: otherBranch,
+    }), { params: { id: "101" } });
+    expect(response.status).toBe(409);
+    expect(state.chatwootAssignee).toBeNull();
+  });
+
+  it("não assume usando operador diferente do colaborador", async () => {
+    state.sharedAgentId = 8;
+    const response = await claim(request("/api/conversations/101/claim?account_id=1", {}), { params: { id: "101" } });
+    expect(response.status).toBe(409);
+    expect(state.chatwootAssignee).toBeNull();
   });
   it("localiza vínculo existente pela conta e conversa e o confirma no Chatwoot", async () => {
     const response = await sync(
@@ -198,7 +231,8 @@ describe("Vínculo Chatwoot e fluxo de atribuição", () => {
       }),
       { params: { id: "101" } },
     );
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(503);
+    expect((await response.json()).error).toBe("TRANSFER_RECONCILIATION_REQUIRED");
     expect(
       state.calls.some((call) => call.url.pathname.endsWith("/complete_conversation_transfer")),
     ).toBe(false);

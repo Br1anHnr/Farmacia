@@ -51,6 +51,7 @@ export default function ChatwootWidgetPage() {
   const [channel, setChannel] = useState<string>("whatsapp");
   const [branchName, setBranchName] = useState<string>("Unidade");
   const [branchId, setBranchId] = useState<string>("");
+  const [labels, setLabels] = useState<string[]>([]);
 
   // Estado de atribuicao
   const [claimState, setClaimState] = useState<{
@@ -259,6 +260,10 @@ export default function ChatwootWidgetPage() {
         const sync = await fetch(scopedUrl("sync-context"), { method: "POST" });
         const syncData = await sync.json();
         if (!sync.ok) throw new Error(syncData.error || "CONVERSATION_NOT_FOUND");
+        if (!active) return;
+        setLabels(syncData.labels || []);
+        setCustomerName(syncData.contact?.name || "");
+        setCustomerPhone(syncData.contact?.phone || "");
         const [suggestionsRes, claimRes, notesRes] = await Promise.all([
           fetch(scopedUrl("suggestions")),
           fetch(scopedUrl("claim")),
@@ -323,6 +328,7 @@ export default function ChatwootWidgetPage() {
       });
       if (res.ok) {
         const data = await res.json();
+        setLabels(data.labels || []);
         setClaimState({
           isClaimed: true,
           claimedBy: data.claimed_by || currentUser?.full_name || "Você",
@@ -394,7 +400,7 @@ export default function ChatwootWidgetPage() {
         <div>
           <p className="font-semibold">{authLoading ? "Verificando sessão do Hub..." : currentUser ? currentUser.full_name : "Você não está conectado ao Hub neste painel"}</p>
           {currentUser && <p className="text-slate-500">{currentUser.email} · {currentUser.role === "manager" ? "Gerente" : currentUser.role === "agent" ? "Atendente" : currentUser.role}</p>}
-          <p className="text-slate-500">Hub: sessão individual · Chatwoot: MultiFarma (operador compartilhado) · conta #{accountId || "não identificada"}</p>
+          <p className="text-slate-500">Hub: sessão individual · Conta Chatwoot #{accountId || "não identificada"}. A transferência atribui o agente selecionado no Chatwoot.</p>
         </div>
         <div className="flex flex-wrap gap-3">
           {currentUser ? <button onClick={handleLogout} disabled={signingOut} className="text-red-700 font-semibold">{signingOut ? "Saindo..." : "Sair / trocar colaborador"}</button> : <button onClick={() => router.push(loginUrl())} className="text-red-700 font-semibold">Entrar no Hub</button>}
@@ -583,12 +589,8 @@ export default function ChatwootWidgetPage() {
                     Etiquetas da Conversa
                   </span>
                   <div className="flex flex-wrap gap-1.5">
-                    <span className="inline-flex items-center gap-1 rounded-lg bg-red-50 border border-red-200 px-2.5 py-1 text-[11px] font-medium text-red-700">
-                      <Tag className="h-3 w-3" /> Farmácia Balcão
-                    </span>
-                    <span className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-medium text-slate-600">
-                      Orçamento
-                    </span>
+                    {labels.map((label) => <span key={label} className="inline-flex items-center gap-1 rounded-lg bg-red-50 border border-red-200 px-2.5 py-1 text-[11px] font-medium text-red-700"><Tag className="h-3 w-3" />{label}</span>)}
+                    {!labels.length && <span className="text-slate-500">Sem etiquetas</span>}
                   </div>
                 </div>
 
@@ -707,6 +709,7 @@ export default function ChatwootWidgetPage() {
         currentBranchName={claimState.branch || branchName}
         currentBranchId={branchId}
         onSuccess={(info) => {
+          setLabels(info.labels);
           setClaimState({
             isClaimed: true,
             claimedBy: info.agentName,

@@ -16,10 +16,13 @@ export function httpFixture(role = "agent") {
     chatwootAvailable: true,
     chatwootAgentEmailMismatch: false,
     chatwootAgentsConfirmed: true,
+    inboxAgentIds: [7, 8, 9],
+    assignmentConfirmed: true,
     sharedAgentId: null as number | null,
     chatwootAssignee: null as number | null,
     labels: ["vip", "atendente-antigo", "orcamento"],
     messages: [] as Array<Record<string, unknown>>,
+    customers: [] as Array<Record<string, unknown>>,
     calls: [] as Array<{ url: URL; options: any }>,
     sale: {
       id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -65,7 +68,7 @@ export function httpFixture(role = "agent") {
                 { id: 7, account_id: 1, email: state.chatwootAgentEmailMismatch ? "operacao@example.invalid" : "test@example.invalid", confirmed: state.chatwootAgentsConfirmed },
                 { id: 8, account_id: 1, email: "manager@example.invalid", confirmed: state.chatwootAgentsConfirmed },
                 { id: 9, account_id: 1, email: "agent2@example.invalid", confirmed: state.chatwootAgentsConfirmed },
-              ],
+              ].filter((agent) => state.inboxAgentIds.includes(agent.id)),
             }),
             { status: 200 },
           );
@@ -84,7 +87,7 @@ export function httpFixture(role = "agent") {
         }
         if (endpoint === "assignments") {
           const assignee = JSON.parse(options.body).assignee_id;
-          state.chatwootAssignee = assignee;
+          if (state.assignmentConfirmed) state.chatwootAssignee = assignee;
           return new Response(JSON.stringify({ id: assignee, account_id: 1 }), { status: 200 });
         }
         if (endpoint === "labels") {
@@ -101,6 +104,9 @@ export function httpFixture(role = "agent") {
         });
       let data: any;
       switch (endpoint) {
+        case "customers":
+          data = state.customers;
+          break;
         case "chatwoot_operation_settings":
           data = state.sharedAgentId === null ? [] : [{ shared_agent_id: state.sharedAgentId }];
           break;
@@ -152,16 +158,16 @@ export function httpFixture(role = "agent") {
             : [];
           break;
         case "internal_messages":
-          data =
-            options.method === "POST"
-              ? [
-                  {
-                    id: "message",
-                    ...JSON.parse(options.body),
-                    created_at: "2026-09-05T00:00:00Z",
-                  },
-                ]
-              : state.messages;
+          if (options.method === "POST") {
+            const body = JSON.parse(options.body);
+            if (body.id && state.messages.some((message) => message.id === body.id)) data = [];
+            else {
+              data = [{ id: "message", ...body, created_at: "2026-09-05T00:00:00Z" }];
+              state.messages.push(data[0]);
+            }
+          } else {
+            data = state.messages.filter((message) => ["id", "room_id", "sender_id"].every((key) => !url.searchParams.has(key) || url.searchParams.get(key) === `eq.${message[key]}`));
+          }
           break;
         case "conversation_links":
           data = state.conversation

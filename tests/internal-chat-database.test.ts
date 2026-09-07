@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PGlite } from "@electric-sql/pglite";
-import { ana, asUser, bruno, database, manager, org } from "./support/database";
+import { ana, asUser, bruno, database, manager, org, room } from "./support/database";
 
 let db: PGlite;
 beforeAll(async () => {
@@ -11,6 +11,17 @@ afterAll(async () => {
 });
 
 describe("Provisionamento e isolamento das salas internas", () => {
+  it("permite retry idempotente com grants/RLS existentes sem UPDATE", async () => {
+    await db.exec("BEGIN");
+    try {
+      await asUser(db, ana);
+      const insert = "INSERT INTO public.internal_messages(id,room_id,sender_id,content) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO NOTHING RETURNING id";
+      const parameters = ["12345678-1234-4234-8234-123456789abc", room, ana, "Retry teste"];
+      expect((await db.query(insert, parameters)).rows).toHaveLength(1);
+      expect((await db.query(insert, parameters)).rows).toHaveLength(0);
+      expect((await db.query("SELECT id FROM public.internal_messages WHERE id=$1", [parameters[0]])).rows).toHaveLength(1);
+    } finally { await db.exec("ROLLBACK"); }
+  });
   it("cria a sala geral e as três salas das filiais", async () => {
     const result = await db.query<{ name: string; is_general: boolean }>(
       "SELECT name,is_general FROM public.internal_rooms WHERE organization_id=$1 ORDER BY is_general DESC,name",
