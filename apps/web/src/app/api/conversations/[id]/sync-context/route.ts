@@ -63,7 +63,7 @@ export async function POST(
     }
     if (
       mapping.organization_id !== auth.context.organizationId ||
-      !auth.context.branchIds.includes(mapping.branch_id)
+      !auth.context.branchIds.includes(existing.data?.[0]?.branch_id || mapping.branch_id)
     ) {
       return NextResponse.json({ error: "CONVERSATION_SCOPE_DENIED" }, { status: 403 });
     }
@@ -93,7 +93,17 @@ export async function POST(
     if (synchronized.error || !synchronized.data?.id) {
       return NextResponse.json({ error: "CONVERSATION_LINK_FAILED" }, { status: 503 });
     }
-    return NextResponse.json({ linked: true, conversation: synchronized.data });
+    // The administrative synchronization result is not authorization to read it.
+    const visible = await supabaseRest<any[]>("conversation_links", {
+      accessToken: auth.context.accessToken,
+      params: { organization_id: `eq.${auth.context.organizationId}`,
+        chatwoot_account_id: `eq.${accountId}`, chatwoot_conversation_id: `eq.${params.id}`, select: "*" },
+    });
+    if (visible.error) return NextResponse.json({ error: "DATA_UNAVAILABLE" }, { status: 503 });
+    if (visible.data?.length !== 1) {
+      return NextResponse.json({ error: "CONVERSATION_ACCESS_DENIED" }, { status: 403 });
+    }
+    return NextResponse.json({ linked: true, conversation: visible.data[0] });
   } catch (error) {
     const failure = chatwootErrorResponse(error);
     return NextResponse.json({ error: failure.error }, { status: failure.status });

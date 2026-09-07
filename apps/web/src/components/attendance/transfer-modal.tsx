@@ -24,6 +24,8 @@ interface TransferModalProps {
 
 function transferErrorMessage(code: string) {
   const messages: Record<string, string> = {
+    SHARED_OPERATOR_NOT_ENABLED: "O usuário MultiFarma precisa estar habilitado nesta caixa de entrada.",
+    OPERATION_CONFIGURATION_UNAVAILABLE: "Não foi possível carregar a configuração do atendimento. Tente novamente.",
     TARGET_NOT_AUTHORIZED: "O funcionário não está autorizado para esta filial.",
     TARGET_NOT_ENABLED_IN_INBOX: "O funcionário não está habilitado na inbox desta conversa.",
     TRANSFER_DATA_UNAVAILABLE: "Os vínculos do funcionário não puderam ser verificados.",

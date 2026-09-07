@@ -262,7 +262,7 @@ export function HubShell({
           <div className="flex items-center gap-3">
             <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-full bg-slate-100 border border-slate-200 text-slate-700 text-xs font-medium">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Conexão Operacional Ativa</span>
+              <span>MultiFarma Hub</span>
             </div>
             {actionButton && <div>{actionButton}</div>}
           </div>

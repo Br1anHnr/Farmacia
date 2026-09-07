@@ -1,8 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { conversationAccess } from "@/lib/conversation-access";
 import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
+import { sharedOperator } from "@/lib/server/shared-operator";
 import {
   assignChatwootConversation,
+  attendantLabel,
+  getChatwootConversationLabels,
+  replaceChatwootConversationLabels,
   chatwootAssigneeId,
   chatwootErrorResponse,
   getChatwootConversation,
@@ -15,12 +19,6 @@ export async function GET(
 ) {
   const auth = await conversationAccess(request, params.id);
   if ("response" in auth) return auth.response;
-  if (
-    auth.conversation.assigned_user_id &&
-    auth.conversation.assigned_user_id !== auth.context.userId
-  ) {
-    return NextResponse.json({ error: "ALREADY_ASSIGNED" }, { status: 409 });
-  }
 
   let claimedByName: string | null = null;
   let branchName = "Unidade";
@@ -75,7 +73,7 @@ export async function POST(
         select: "agent_id",
       },
     });
-    const agentId = Number(mapping.data?.[0]?.agent_id);
+    const agentId = (await sharedOperator(auth.context, auth.accountId)) ?? Number(mapping.data?.[0]?.agent_id);
     if (mapping.error || !Number.isSafeInteger(agentId)) {
       return NextResponse.json({ error: "CHATWOOT_MAPPING_REQUIRED" }, { status: 403 });
     }
@@ -85,7 +83,20 @@ export async function POST(
     if (!enabledAgents.some((agent) => agent.id === agentId && agent.confirmed !== false)) {
       return NextResponse.json({ error: "AGENT_NOT_ENABLED_IN_INBOX" }, { status: 403 });
     }
-    await assignChatwootConversation(auth.accountId, Number(params.id), agentId);
+    const previousLabels = await getChatwootConversationLabels(auth.accountId, Number(params.id));
+    const nextLabels = [...previousLabels.filter((label) => !label.startsWith("atendente-")), attendantLabel(auth.context.fullName)];
+    try {
+      await assignChatwootConversation(auth.accountId, Number(params.id), agentId);
+      await replaceChatwootConversationLabels(auth.accountId, Number(params.id), nextLabels);
+    } catch (error) {
+      try {
+        await setChatwootConversationAssignee(auth.accountId, Number(params.id), previousAssigneeId);
+        await replaceChatwootConversationLabels(auth.accountId, Number(params.id), previousLabels);
+      } catch {
+        return NextResponse.json({ error: "CLAIM_RECONCILIATION_REQUIRED" }, { status: 503 });
+      }
+      throw error;
+    }
 
     const claim = await supabaseRest<any>("rpc/claim_conversation", {
       accessToken: auth.context.accessToken,
@@ -97,13 +108,14 @@ export async function POST(
       },
     });
     if (claim.error || !claim.data?.agent_id) {
-      if (previousAssigneeId !== agentId) {
+      {
         try {
           await setChatwootConversationAssignee(
             auth.accountId,
             Number(params.id),
             previousAssigneeId,
           );
+          await replaceChatwootConversationLabels(auth.accountId, Number(params.id), previousLabels);
         } catch {
           return NextResponse.json(
             { error: "CLAIM_RECONCILIATION_REQUIRED" },

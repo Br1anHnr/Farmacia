@@ -16,6 +16,7 @@ export function httpFixture(role = "agent") {
     chatwootAvailable: true,
     chatwootAgentEmailMismatch: false,
     chatwootAgentsConfirmed: true,
+    sharedAgentId: null as number | null,
     chatwootAssignee: null as number | null,
     labels: ["vip", "atendente-antigo", "orcamento"],
     messages: [] as Array<Record<string, unknown>>,
@@ -100,6 +101,9 @@ export function httpFixture(role = "agent") {
         });
       let data: any;
       switch (endpoint) {
+        case "chatwoot_operation_settings":
+          data = state.sharedAgentId === null ? [] : [{ shared_agent_id: state.sharedAgentId }];
+          break;
         case "token": {
           const body = JSON.parse(options.body);
           if (body.password === "wrong")
@@ -204,6 +208,7 @@ export function httpFixture(role = "agent") {
           data = { agent_id: 7, account_id: 1, branch_id: branch };
           break;
         case "sync_webhook":
+          state.conversation = true;
           data = {
             id: "link",
             organization_id: org,

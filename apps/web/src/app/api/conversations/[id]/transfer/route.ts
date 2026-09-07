@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { conversationAccess } from "@/lib/conversation-access";
 import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
 import { uuid } from "@/lib/server-auth";
+import { sharedOperator } from "@/lib/server/shared-operator";
 import {
   assignChatwootConversation,
   attendantLabel,
@@ -87,7 +88,13 @@ export async function POST(
   if (mappingRes.error || membershipRes.error || profileRes.error) {
     return NextResponse.json({ error: "TRANSFER_DATA_UNAVAILABLE" }, { status: 503 });
   }
-  const targetAgentId = Number(mappingRes.data?.[0]?.agent_id);
+  let sharedAgentId: number | null;
+  try { sharedAgentId = await sharedOperator(auth.context, auth.accountId); }
+  catch (error) {
+    const failure = chatwootErrorResponse(error);
+    return NextResponse.json({ error: failure.error }, { status: failure.status });
+  }
+  const targetAgentId = sharedAgentId ?? Number(mappingRes.data?.[0]?.agent_id);
   const targetName = profileRes.data?.[0]?.full_name;
   if (!Number.isSafeInteger(targetAgentId) || !membershipRes.data?.length || !targetName) {
     return NextResponse.json({ error: "TARGET_NOT_AUTHORIZED" }, { status: 403 });

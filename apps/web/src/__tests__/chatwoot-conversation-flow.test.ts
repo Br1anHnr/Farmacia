@@ -29,6 +29,26 @@ function request(path: string, body?: unknown) {
 }
 
 describe("Vínculo Chatwoot e fluxo de atribuição", () => {
+  it("usa o operador compartilhado e etiqueta o responsável do Hub", async () => {
+    state.sharedAgentId = 7;
+    const listed = await agents(request("/api/agents?conversation_id=101&account_id=1"));
+    expect((await listed.json()).agents.map((item: any) => item.id)).toContain(otherAgentUser);
+    const response = await transfer(request("/api/conversations/101/transfer?account_id=1", {
+      target_user_id: otherAgentUser, target_branch_id: otherBranch,
+    }), { params: { id: "101" } });
+    expect(response.status).toBe(200);
+    expect(state.chatwootAssignee).toBe(7);
+    expect(state.labels).toEqual(expect.arrayContaining(["vip", "orcamento", "atendente-atendente-dois"]));
+    expect(state.labels).not.toContain("atendente-antigo");
+  });
+
+  it("assume com operador compartilhado e preserva etiquetas comerciais", async () => {
+    state.sharedAgentId = 8;
+    const response = await claim(request("/api/conversations/101/claim?account_id=1", {}), { params: { id: "101" } });
+    expect(response.status).toBe(200);
+    expect(state.chatwootAssignee).toBe(8);
+    expect(state.labels).toEqual(expect.arrayContaining(["vip", "orcamento", "atendente-test-user"]));
+  });
   it("localiza vínculo existente pela conta e conversa e o confirma no Chatwoot", async () => {
     const response = await sync(
       request("/api/conversations/101/sync-context?account_id=1", {}),

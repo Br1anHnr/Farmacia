@@ -38,6 +38,7 @@ export default function ChatwootWidgetPage() {
   // Modais
   const [isTransferOpen, setIsTransferOpen] = useState(false);
   const [isClosureOpen, setIsClosureOpen] = useState(false);
+  const [contextReady, setContextReady] = useState(false);
 
   // Contexto da conversa
   const [conversationId, setConversationId] = useState<number>(0);
@@ -94,6 +95,7 @@ export default function ChatwootWidgetPage() {
       CONVERSATION_NOT_FOUND:
         "Conversa não vinculada ao sistema da farmácia.",
       CHATWOOT_CONVERSATION_NOT_FOUND: "A conversa não foi encontrada no Chatwoot.",
+      CONVERSATION_ACCESS_DENIED: "Esta conversa pertence a outro colaborador. Peça ao gerente para transferi-la para você pelo Hub.",
       CHATWOOT_REQUEST_FAILED: "O Chatwoot não confirmou a operação.",
       CHATWOOT_UNAVAILABLE: "O Chatwoot está temporariamente indisponível.",
       INBOX_CONFIGURATION_REQUIRED: "A inbox desta conversa ainda não está vinculada a uma filial.",
@@ -226,6 +228,7 @@ export default function ChatwootWidgetPage() {
   // Busca sugestões e status de atendimento
   useEffect(() => {
     if (!conversationId || !accountId) return;
+    setContextReady(false);
     let active = true;
     const scopedUrl = (suffix: string) =>
       `/api/conversations/${conversationId}/${suffix}?account_id=${accountId}`;
@@ -264,6 +267,7 @@ export default function ChatwootWidgetPage() {
             claimedUserId: data.claimed_user_id,
             branch: data.branch || branchName,
           });
+          setContextReady(true);
         }
         if (notesRes.ok) {
           const data = await notesRes.json();
@@ -423,7 +427,7 @@ export default function ChatwootWidgetPage() {
               <button
                 type="button"
                 onClick={handleClaim}
-                disabled={isClaiming || conversationId === 0}
+                disabled={isClaiming || conversationId === 0 || !contextReady}
                 className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors"
               >
                 <UserCheck className="h-4 w-4" />
@@ -434,7 +438,7 @@ export default function ChatwootWidgetPage() {
             <button
               type="button"
               onClick={() => setIsTransferOpen(true)}
-              disabled={conversationId === 0}
+              disabled={conversationId === 0 || !contextReady}
               className="flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 hover:border-slate-400 disabled:opacity-50 transition-colors"
             >
               <ArrowRightLeft className="h-3.5 w-3.5 text-slate-500" />
@@ -447,7 +451,7 @@ export default function ChatwootWidgetPage() {
                 setPrefilledItems([]);
                 setIsClosureOpen(true);
               }}
-              disabled={conversationId === 0}
+              disabled={conversationId === 0 || !contextReady}
               className="flex items-center gap-1.5 rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-red-700 disabled:opacity-50 transition-colors"
             >
               <ShoppingBag className="h-3.5 w-3.5" />

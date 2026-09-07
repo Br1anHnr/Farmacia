@@ -257,6 +257,9 @@ export function ClosureModal({
       const data = await res.json();
 
       if (!res.ok) {
+        if (data.error === "CONVERSATION_NOT_FOUND" || data.error === "CONVERSATION_ACCESS_DENIED") {
+          throw new Error("Conversa indisponível para seu usuário. Peça ao gerente para transferi-la para você pelo Hub e reabra o painel.");
+        }
         throw new Error(data.message || data.error || "Falha ao encerrar atendimento.");
       }
 

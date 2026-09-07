@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     accessToken: auth.context.accessToken,
     params: {
       organization_id: `eq.${auth.context.organizationId}`,
-      select: "id,name,branch_id,is_general,branches(name)",
+      select: "id,name,branch_id,is_general,branches!internal_rooms_branch_id_fkey(name)",
       order: "is_general.desc,name.asc",
     },
   });
