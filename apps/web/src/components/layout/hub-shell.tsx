@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   BarChart3,
@@ -16,7 +16,8 @@ import {
   X,
   Plus,
 } from "lucide-react";
-import { AUTH_COOKIE_NAME, type UserContext } from "@/lib/auth-store";
+import { useHubSession } from "@/lib/use-hub-session";
+import { notifyHubSessionChanged } from "@/lib/hub-session";
 
 interface HubShellProps {
   children: React.ReactNode;
@@ -32,38 +33,17 @@ export function HubShell({
   actionButton,
 }: HubShellProps) {
   const pathname = usePathname();
-  const router = useRouter();
-  const [user, setUser] = useState<UserContext | null>(null);
+  const { user, loading: sessionLoading, error: sessionError } = useHubSession(pathname);
+  const [logoutError, setLogoutError] = useState<string | null>(null);
   const [mobileOpen, setMobileOpen] = useState(false);
-
-  useEffect(() => {
-    // 1. Tenta carregar do localStorage imediatamente para evitar flash
-    try {
-      const stored = localStorage.getItem("mf_user_context");
-      if (stored) {
-        setUser(JSON.parse(stored));
-      }
-    } catch {}
-
-    // 2. Confirma com /api/auth/me
-    fetch("/api/auth/me")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.user) {
-          setUser(d.user);
-          localStorage.setItem("mf_user_context", JSON.stringify(d.user));
-        }
-      })
-      .catch(() => {});
-  }, []);
 
   const handleLogout = async () => {
     try {
-      await fetch("/api/auth/logout", { method: "POST" });
-    } catch {}
-    document.cookie = `${AUTH_COOKIE_NAME}=; path=/; max-age=0;`;
-    localStorage.removeItem("mf_user_context");
-    router.push("/login");
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      notifyHubSessionChanged();
+      if (!response.ok) throw new Error("Não foi possível confirmar a saída. Tente novamente.");
+      window.location.assign("/login");
+    } catch (error) { setLogoutError(error instanceof Error ? error.message : "Falha ao sair."); }
   };
 
   const isManager = user?.role === "manager";
@@ -270,7 +250,10 @@ export function HubShell({
 
         {/* Conteúdo da Página */}
         <main className="flex-1 p-6 overflow-y-auto bg-slate-50">
-          <div className="max-w-7xl mx-auto">{children}</div>
+          {logoutError && <p role="alert" className="mb-3 text-red-700">{logoutError}</p>}
+          <div className="max-w-7xl mx-auto" key={user ? `${user.user_id}:${user.role}` : "no-session"}>
+            {sessionLoading ? <p>Verificando sessão do Hub...</p> : sessionError ? <p role="alert">{sessionError}</p> : !user ? <p>Sua sessão do Hub terminou. <a href="/login" className="text-red-700">Entrar novamente</a></p> : /^\/(dashboard|reports|audit)(\/|$)/.test(pathname) && !isManager ? <p role="alert">Você está conectado como {user.full_name}. Esta área exige uma conta de gerente no Hub. <a href="/login" className="text-red-700">Trocar conta</a></p> : children}
+          </div>
         </main>
       </div>
     </div>

@@ -29,6 +29,19 @@ function request(body: Record<string, unknown>) {
 }
 
 describe("Encerramento de atendimento", () => {
+  it("expõe persistência parcial quando Chatwoot falha e permite repetir a sincronização", async () => {
+    state.closure.outcome = "resolved";
+    state.chatwootAvailable = false;
+    const pending = await POST(request({ outcome: "resolved" }), { params: { id: "101" } });
+    expect(pending.status).toBe(202);
+    expect(await pending.json()).toMatchObject({ persisted: true, chatwoot_synced: false });
+    state.chatwootAvailable = true;
+    const retried = await POST(request({ outcome: "resolved" }), { params: { id: "101" } });
+    expect(retried.status).toBe(201);
+    expect(await retried.json()).toMatchObject({ chatwoot_synced: true });
+    const keys = state.calls.filter(c => c.url.pathname.endsWith("/close_conversation")).map(c => JSON.parse(c.options.body).p_key);
+    expect(keys).toEqual([key, key]);
+  });
   it("exige sessão autenticada", async () => {
     const response = await POST(
       new NextRequest("http://localhost:3000/api/conversations/101/close", {

@@ -177,6 +177,7 @@ export async function createChatwootPrivateNote(
 
 export function attendantLabel(name: string) {
   const normalized = name
+    .replace(/\s*\((?:atendente|gerente)\)\s*$/i, "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
@@ -185,6 +186,12 @@ export function attendantLabel(name: string) {
     .slice(0, 40);
   if (!normalized) throw new ChatwootError("INVALID_AGENT_LABEL", 400);
   return `atendente-${normalized}`;
+}
+
+export function responsibilityLabels(labels: string[], name: string) {
+  return [...new Set([...labels.filter((label) =>
+    !label.startsWith("atendente-") && !label.startsWith("atendido-por:")
+  ), attendantLabel(name)])];
 }
 
 export function conversationAccountId(request: Request) {

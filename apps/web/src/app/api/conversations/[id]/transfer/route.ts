@@ -5,7 +5,7 @@ import { uuid } from "@/lib/server-auth";
 import { requireIndividualAssignment } from "@/lib/server/shared-operator";
 import {
   assignChatwootConversation,
-  attendantLabel,
+  responsibilityLabels,
   chatwootAssigneeId,
   chatwootErrorResponse,
   createChatwootPrivateNote,
@@ -109,10 +109,7 @@ export async function POST(
 
     const previousLabels = await getChatwootConversationLabels(auth.accountId, Number(params.id));
     previousChatwootState = { assigneeId: previousAssigneeId, labels: previousLabels };
-    const nextLabels = [
-      ...previousLabels.filter((label) => !label.startsWith("atendente-")),
-      attendantLabel(targetName),
-    ];
+    const nextLabels = responsibilityLabels(previousLabels, targetName);
     chatwootMutationStarted = true;
     await assignChatwootConversation(auth.accountId, Number(params.id), targetAgentId);
     await replaceChatwootConversationLabels(auth.accountId, Number(params.id), nextLabels);

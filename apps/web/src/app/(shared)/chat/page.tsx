@@ -2,9 +2,9 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { AlertCircle, Building2, Hash, Loader2, MessagesSquare, Send, Users } from "lucide-react";
-import { type UserContext } from "@/lib/auth-store";
 import { HubShell } from "@/components/layout/hub-shell";
 import { submissionKey } from "@/lib/submission-key";
+import { useHubSession } from "@/lib/use-hub-session";
 
 interface Room {
   id: string;
@@ -24,7 +24,7 @@ interface Message {
 }
 
 export default function InternalChatPage() {
-  const [currentUser, setCurrentUser] = useState<UserContext | null>(null);
+  const { user: currentUser } = useHubSession();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [selectedRoomId, setSelectedRoomId] = useState("");
   const [inputText, setInputText] = useState("");
@@ -39,26 +39,28 @@ export default function InternalChatPage() {
   const selectedRoom = rooms.find((room) => room.id === selectedRoomId) || null;
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/auth/me").then((response) => (response.ok ? response.json() : null)),
-      fetch("/api/chat/rooms").then(async (response) => {
+    let active = true;
+    setRooms([]);
+    setMessages([]);
+    setSelectedRoomId("");
+    if (!currentUser) return;
+    setLoadingRooms(true);
+    fetch("/api/chat/rooms")
+      .then(async (response) => {
         if (!response.ok) throw new Error("ROOMS_UNAVAILABLE");
         return response.json();
-      }),
-    ])
-      .then(([authData, roomsData]) => {
-        if (authData?.user) {
-          setCurrentUser(authData.user);
-          try { localStorage.setItem("mf_user_context", JSON.stringify(authData.user)); } catch {}
-        }
+      })
+      .then((roomsData) => {
+        if (!active) return;
         const availableRooms: Room[] = roomsData?.rooms || [];
         setRooms(availableRooms);
         setSelectedRoomId(availableRooms[0]?.id || "");
         if (!availableRooms.length) setChatError("Nenhuma sala foi provisionada para o seu usuário.");
       })
-      .catch(() => setChatError("Não foi possível carregar as salas autorizadas."))
-      .finally(() => setLoadingRooms(false));
-  }, []);
+      .catch(() => { if (active) setChatError("Não foi possível carregar as salas autorizadas."); })
+      .finally(() => { if (active) setLoadingRooms(false); });
+    return () => { active = false; };
+  }, [currentUser?.user_id]);
 
   const fetchMessages = async (roomId: string) => {
     if (!roomId) return;

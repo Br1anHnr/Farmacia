@@ -264,6 +264,10 @@ export function ClosureModal({
         throw new Error(data.message || data.error || "Falha ao encerrar atendimento.");
       }
 
+      if (data.chatwoot_synced === false) {
+        setError(data.message || "Desfecho salvo no Hub; sincronização com Chatwoot pendente. Tente novamente.");
+        return;
+      }
       setSuccess(true);
       setTimeout(() => {
         onSuccess({ outcome, data });

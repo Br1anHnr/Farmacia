@@ -94,7 +94,10 @@ export function httpFixture(role = "agent") {
           if (options.method === "POST") state.labels = JSON.parse(options.body).labels;
           return new Response(JSON.stringify({ payload: state.labels }), { status: 200 });
         }
-        if (endpoint === "messages") {
+          if (endpoint === "toggle_status") {
+            return new Response(JSON.stringify({ status: "resolved" }), { status: 200 });
+          }
+          if (endpoint === "messages") {
           return new Response(JSON.stringify({ id: 500 }), { status: 200 });
         }
       }

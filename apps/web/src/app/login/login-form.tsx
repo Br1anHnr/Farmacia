@@ -1,8 +1,9 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { AlertCircle, ArrowRight, Eye, EyeOff, LockKeyhole } from "lucide-react";
+import { notifyHubSessionChanged, hubLoginDestination } from "@/lib/hub-session";
 
 const DEMO_ACCOUNTS = [
   { name: "Carlos Mendes", role: "Gerente", email: "carlos.gerente@multifarma.com" },
@@ -11,7 +12,6 @@ const DEMO_ACCOUNTS = [
 ];
 
 export function LoginForm({ demoMode }: { demoMode: boolean }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -34,8 +34,8 @@ export function LoginForm({ demoMode }: { demoMode: boolean }) {
         setError(data.message || "Não foi possível entrar. Confira seus dados.");
         return;
       }
-      try { if (data.user) localStorage.setItem("mf_user_context", JSON.stringify(data.user)); } catch {}
-      router.push(searchParams.get("redirect") || data.redirectTo || "/dashboard");
+      notifyHubSessionChanged();
+      window.location.assign(hubLoginDestination(searchParams.get("redirect"), data.redirectTo || "/chatwoot-widget"));
     } catch {
       setError("Não foi possível conectar ao sistema. Tente novamente.");
     } finally {

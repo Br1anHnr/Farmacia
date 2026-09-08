@@ -4,7 +4,7 @@ import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
 import { requireIndividualAssignment } from "@/lib/server/shared-operator";
 import {
   assignChatwootConversation,
-  attendantLabel,
+  responsibilityLabels,
   getChatwootConversationLabels,
   replaceChatwootConversationLabels,
   chatwootAssigneeId,
@@ -51,7 +51,7 @@ export async function GET(
     is_claimed:
       !!auth.conversation.assigned_user_id ||
       !!auth.conversation.chatwoot_assignee_id,
-    claimed_by: claimedByName || auth.conversation.assigned_user_id,
+    claimed_by: claimedByName || (auth.conversation.chatwoot_assignee_id ? "Agente do Chatwoot — vínculo pendente" : null),
     claimed_user_id: auth.conversation.assigned_user_id,
     branch: branchName,
     branch_id: auth.conversation.branch_id,
@@ -85,7 +85,10 @@ export async function POST(
       return NextResponse.json({ error: "AGENT_NOT_ENABLED_IN_INBOX" }, { status: 403 });
     }
     const previousLabels = await getChatwootConversationLabels(auth.accountId, Number(params.id));
-    const nextLabels = [...previousLabels.filter((label) => !label.startsWith("atendente-")), attendantLabel(auth.context.fullName)];
+    if (previousAssigneeId && previousAssigneeId !== agentId) {
+      return NextResponse.json({ error: "ALREADY_ASSIGNED" }, { status: 409 });
+    }
+    const nextLabels = responsibilityLabels(previousLabels, auth.context.fullName);
     try {
       await assignChatwootConversation(auth.accountId, Number(params.id), agentId);
       await replaceChatwootConversationLabels(auth.accountId, Number(params.id), nextLabels);

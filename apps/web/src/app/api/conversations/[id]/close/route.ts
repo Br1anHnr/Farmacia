@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { CloseConversationInputSchema } from "@hub-farmacia/contracts";
-import { supabaseAdminRest, supabaseRest } from "@/lib/server/supabase";
+import { supabaseRest } from "@/lib/server/supabase";
 import { uuid } from "@/lib/server-auth";
 import { conversationAccess } from "@/lib/conversation-access";
 
@@ -48,27 +48,8 @@ export async function POST(
   )
     return NextResponse.json({ error: "CLOSURE_ACCESS_DENIED" }, { status: 403 });
 
-  // Se a conversa for aberta e nao tiver atendente atribuido, atribui ao agente que esta fechando
-  if (auth.context.role === "agent") {
-    try {
-      const convCheck = await supabaseAdminRest<any[]>("conversation_links", {
-        params: {
-          organization_id: `eq.${auth.context.organizationId}`,
-          chatwoot_account_id: `eq.${auth.accountId}`,
-          chatwoot_conversation_id: `eq.${conversationId}`,
-          select: "id,assigned_user_id",
-        },
-      });
-      if (convCheck.data?.[0] && !convCheck.data[0].assigned_user_id) {
-        await supabaseAdminRest("conversation_links", {
-          method: "PATCH",
-          params: { id: `eq.${convCheck.data[0].id}` },
-          body: { assigned_user_id: auth.context.userId },
-        });
-      }
-    } catch {
-      // Segue para a RPC que fara a validacao de seguranca
-    }
+  if (auth.context.role === "agent" && auth.conversation.assigned_user_id !== auth.context.userId) {
+    return NextResponse.json({ error: "CLOSURE_ACCESS_DENIED", message: "Assuma o atendimento antes de encerrá-lo." }, { status: 403 });
   }
 
   const result = await supabaseRest<any>("rpc/close_conversation", {
@@ -92,56 +73,40 @@ export async function POST(
       { status: [400, 403, 409].includes(result.status) ? result.status : 503 },
     );
 
-  // Sincroniza resolucao com Chatwoot se configurado (best-effort)
+  // A persisted closure must not be presented as a confirmed Chatwoot resolution.
+  let chatwoot_synced = false;
+  let note_synced = false;
   const cwBase = process.env.CHATWOOT_BASE_URL;
   const cwToken = process.env.CHATWOOT_API_TOKEN;
-  const cwAccount = auth.accountId;
-
   if (cwBase && cwToken) {
     try {
-      // 1. Marca como resolvida no Chatwoot
-      fetch(
-        `${cwBase}/api/v1/accounts/${cwAccount}/conversations/${conversationId}/toggle_status`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            api_access_token: cwToken,
-          },
-          body: JSON.stringify({ status: "resolved" }),
-          signal: AbortSignal.timeout(4000),
-        },
-      ).catch(() => {});
-
-      // 2. Envia nota interna de fechamento
-      const outcomeDesc =
-        input.outcome === "sale"
-          ? `Venda confirmada e registrada no sistema`
-          : input.outcome === "not_sold"
-          ? `Não venda registrada (${input.reason || "sem motivo"})`
-          : input.outcome === "resolved"
-          ? `Dúvida resolvida com sucesso`
-          : `Atendimento cancelado`;
-
-      fetch(
-        `${cwBase}/api/v1/accounts/${cwAccount}/conversations/${conversationId}/messages`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            api_access_token: cwToken,
-          },
-          body: JSON.stringify({
-            content: `[MultiFarma Hub] Atendimento finalizado por ${auth.context.fullName}. Desfecho: ${outcomeDesc}.`,
-            private: true,
-          }),
-          signal: AbortSignal.timeout(4000),
-        },
-      ).catch(() => {});
-    } catch {
-      // Nao falha a resposta se o Chatwoot estiver temporariamente inacessivel
-    }
+      const response = await fetch(
+        `${cwBase}/api/v1/accounts/${auth.accountId}/conversations/${conversationId}/toggle_status`,
+        { method: "POST", headers: { "Content-Type": "application/json", api_access_token: cwToken },
+          body: JSON.stringify({ status: "resolved" }), signal: AbortSignal.timeout(4000) });
+      const status = response.ok ? await response.json() : null;
+      chatwoot_synced = response.ok && (status?.status === "resolved" || status?.payload?.status === "resolved");
+      if (chatwoot_synced) {
+        const messagesUrl = `${cwBase}/api/v1/accounts/${auth.accountId}/conversations/${conversationId}/messages`;
+        const headers = { "Content-Type": "application/json", api_access_token: cwToken };
+        const marker = `[Hub encerramento ${key}]`;
+        const history = await fetch(messagesUrl, { headers, signal: AbortSignal.timeout(4000) });
+        if (history.ok) {
+          const data = await history.json();
+          const messages = Array.isArray(data.payload) ? data.payload : [];
+          note_synced = messages.some((message: any) => message.private && message.content?.includes(marker));
+          if (!note_synced) {
+            const descriptions = { sale: "Venda realizada", not_sold: "Não venda", resolved: "Dúvida resolvida", cancelled: "Cancelado" };
+            const note = await fetch(messagesUrl, { method: "POST", headers,
+              body: JSON.stringify({ private: true, content: `${marker} ${auth.context.fullName}: ${descriptions[input.outcome]}.${"reason" in input ? ` Motivo: ${input.reason}.` : ""}` }),
+              signal: AbortSignal.timeout(4000) });
+            note_synced = note.ok;
+          }
+        }
+      }
+    } catch { /* The same idempotency key can retry synchronization safely. */ }
   }
-
-  return NextResponse.json(result.data, { status: 201 });
+  return NextResponse.json({ ...result.data, chatwoot_synced, note_synced,
+    message: chatwoot_synced ? undefined : "Desfecho salvo no Hub; encerramento no Chatwoot pendente. Tente novamente para sincronizar." },
+    { status: chatwoot_synced ? 201 : 202 });
 }

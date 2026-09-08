@@ -14,9 +14,13 @@ export async function middleware(request: NextRequest) {
       request.url,
     );
     url.searchParams.set("redirect", path + request.nextUrl.search);
-    return NextResponse.redirect(url);
+    const response = NextResponse.redirect(url);
+    response.headers.set("Cache-Control", "private, no-store");
+    return response;
   }
-  return NextResponse.next();
+  const response = NextResponse.next();
+  response.headers.set("Cache-Control", "private, no-store");
+  return response;
 }
 export const config = {
   matcher: [

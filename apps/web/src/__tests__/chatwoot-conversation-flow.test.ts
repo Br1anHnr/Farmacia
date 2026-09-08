@@ -185,7 +185,7 @@ describe("Vínculo Chatwoot e fluxo de atribuição", () => {
   });
 
   it("restaura o responsável do Chatwoot quando o claim não persiste no Hub", async () => {
-    state.chatwootAssignee = 8;
+    state.chatwootAssignee = null;
     state.fail = "claim_conversation";
     const response = await claim(
       request("/api/conversations/101/claim?account_id=1", {}),
@@ -193,7 +193,14 @@ describe("Vínculo Chatwoot e fluxo de atribuição", () => {
     );
     expect(response.status).toBe(503);
     expect((await response.json()).error).toBe("CLAIM_NOT_PERSISTED");
-    expect(state.chatwootAssignee).toBe(8);
+    expect(state.chatwootAssignee).toBeNull();
+  });
+
+  it("não toma a conversa atribuída a outro agente", async () => {
+    state.chatwootAssignee = 8;
+    const response = await claim(request("/api/conversations/101/claim?account_id=1", {}), { params: { id: "101" } });
+    expect(response.status).toBe(409);
+    expect(state.calls.some(call => call.options.method === "POST" && call.url.pathname.endsWith("/assignments"))).toBe(false);
   });
 
   it.each([

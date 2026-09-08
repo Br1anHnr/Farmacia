@@ -25,23 +25,24 @@ import {
   ShieldAlert,
   X,
 } from "lucide-react";
-import { AUTH_COOKIE_NAME, type UserContext } from "@/lib/auth-store";
+import { useHubSession } from "@/lib/use-hub-session";
+import { notifyHubSessionChanged } from "@/lib/hub-session";
 import { HubShell } from "@/components/layout/hub-shell";
 import { TransferModal } from "@/components/attendance/transfer-modal";
 import { ClosureModal } from "@/components/attendance/closure-modal";
 
 export default function ChatwootWidgetPage() {
   const router = useRouter();
-  const [currentUser, setCurrentUser] = useState<UserContext | null>(null);
   const [isEmbedded, setIsEmbedded] = useState(false);
-  const [authLoading, setAuthLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
+  const { user: currentUser, loading: authLoading, accountId: sessionAccountId, error: sessionError } = useHubSession(reloadKey);
   const [signingOut, setSigningOut] = useState(false);
 
   // Modais
   const [isTransferOpen, setIsTransferOpen] = useState(false);
   const [isClosureOpen, setIsClosureOpen] = useState(false);
   const [contextReady, setContextReady] = useState(false);
+  const [conversationClosed, setConversationClosed] = useState(false);
 
   // Contexto da conversa
   const [conversationId, setConversationId] = useState<number>(0);
@@ -100,7 +101,7 @@ export default function ChatwootWidgetPage() {
         "Conversa não vinculada ao sistema da farmácia.",
       UNAUTHENTICATED: "Sua sessão expirou ou não está disponível neste painel. Entre novamente ou abra o painel em outra aba.",
       CHATWOOT_CONVERSATION_NOT_FOUND: "A conversa não foi encontrada no Chatwoot.",
-      CONVERSATION_ACCESS_DENIED: "Esta conversa pertence a outro colaborador. Peça ao gerente para transferi-la para você pelo Hub.",
+      CONVERSATION_ACCESS_DENIED: "Não foi possível autorizar o acesso a esta conversa. Verifique sua filial e o vínculo da inbox.",
       CHATWOOT_REQUEST_FAILED: "O Chatwoot não confirmou a operação.",
       CHATWOOT_UNAVAILABLE: "O Chatwoot está temporariamente indisponível.",
       INBOX_CONFIGURATION_REQUIRED: "A inbox desta conversa ainda não está vinculada a uma filial.",
@@ -132,23 +133,18 @@ export default function ChatwootWidgetPage() {
   useEffect(() => {
     setIsEmbedded(window.self !== window.top);
 
-    setAuthLoading(true);
-    fetch("/api/auth/me", { cache: "no-store" })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.user) {
-          setCurrentUser(d.user);
-          if (d.chatwoot_account_id) setAccountId((previous) => previous || d.chatwoot_account_id);
-          if (d.user.primary_branch_id) {
-            setBranchId(d.user.primary_branch_id);
-          } else if (d.user.branch_ids?.[0]) {
-            setBranchId(d.user.branch_ids[0]);
-          }
-        } else { setCurrentUser(null); setContextReady(false); }
-      })
-      .catch(() => { setCurrentUser(null); setErrorMsg("Não foi possível verificar sua sessão. Tente novamente."); })
-      .finally(() => setAuthLoading(false));
-  }, [reloadKey]);
+    setAccountId(sessionAccountId || 0);
+    setContextReady(false);
+    setConversationClosed(false);
+    setIsTransferOpen(false);
+    setIsClosureOpen(false);
+    setClaimState({ isClaimed: false, claimedBy: "", branch: "" });
+    setNotesList([]);
+    setAiSuggestion(null);
+    setClosureCompleted(null);
+    setBranchId(currentUser?.primary_branch_id || currentUser?.branch_ids?.[0] || "");
+    setErrorMsg(sessionError);
+  }, [currentUser, sessionAccountId, sessionError]);
 
   const loginUrl = () => "/login?redirect=" + encodeURIComponent(window.location.pathname + window.location.search);
   const handleLogout = async () => {
@@ -156,10 +152,9 @@ export default function ChatwootWidgetPage() {
     setContextReady(false);
     try {
       const response = await fetch("/api/auth/logout", { method: "POST" });
+      notifyHubSessionChanged();
       if (!response.ok) throw new Error("Não foi possível confirmar a saída. Tente novamente.");
-      setCurrentUser(null);
-      try { localStorage.removeItem("mf_user_context"); } catch {}
-      router.push(loginUrl());
+      window.location.assign(loginUrl());
     } catch (error) {
       setErrorMsg(error instanceof Error ? error.message : "Falha ao sair.");
     } finally { setSigningOut(false); }
@@ -261,6 +256,7 @@ export default function ChatwootWidgetPage() {
         const syncData = await sync.json();
         if (!sync.ok) throw new Error(syncData.error || "CONVERSATION_NOT_FOUND");
         if (!active) return;
+        setConversationClosed(String(syncData.conversation?.status || "").startsWith("closed_"));
         setLabels(syncData.labels || []);
         setCustomerName(syncData.contact?.name || "");
         setCustomerPhone(syncData.contact?.phone || "");
@@ -401,6 +397,7 @@ export default function ChatwootWidgetPage() {
           <p className="font-semibold">{authLoading ? "Verificando sessão do Hub..." : currentUser ? currentUser.full_name : "Você não está conectado ao Hub neste painel"}</p>
           {currentUser && <p className="text-slate-500">{currentUser.email} · {currentUser.role === "manager" ? "Gerente" : currentUser.role === "agent" ? "Atendente" : currentUser.role}</p>}
           <p className="text-slate-500">Hub: sessão individual · Conta Chatwoot #{accountId || "não identificada"}. A transferência atribui o agente selecionado no Chatwoot.</p>
+          <p className="text-slate-500">Trocar o colaborador aqui também troca a conta do Hub nas abas deste perfil do navegador. Para testar duas pessoas, use perfis separados.</p>
         </div>
         <div className="flex flex-wrap gap-3">
           {currentUser ? <button onClick={handleLogout} disabled={signingOut} className="text-red-700 font-semibold">{signingOut ? "Saindo..." : "Sair / trocar colaborador"}</button> : <button onClick={() => router.push(loginUrl())} className="text-red-700 font-semibold">Entrar no Hub</button>}
@@ -451,14 +448,14 @@ export default function ChatwootWidgetPage() {
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-slate-800">
-                  {claimState.isClaimed ? `Em Atendimento` : `Aguardando Atendente`}
+                  {!contextReady ? "Estado não confirmado" : conversationClosed ? "Atendimento encerrado" : claimState.isClaimed ? `Em Atendimento` : `Aguardando Atendente`}
                 </span>
                 <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-semibold text-slate-600">
                   #{conversationId > 0 ? conversationId : "Sem conversa ativa"}
                 </span>
               </div>
               <p className="text-[11px] text-slate-500">
-                {claimState.isClaimed
+                {!contextReady ? "Recarregue o atendimento para confirmar o responsável." : claimState.isClaimed
                   ? `Responsável: ${claimState.claimedBy}`
                   : "Nenhum atendente assumiu esta conversa"}
               </p>
@@ -471,7 +468,7 @@ export default function ChatwootWidgetPage() {
               <button
                 type="button"
                 onClick={handleClaim}
-                disabled={isClaiming || conversationId === 0 || !contextReady}
+                disabled={isClaiming || conversationId === 0 || !contextReady || conversationClosed}
                 className="flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50 transition-colors"
               >
                 <UserCheck className="h-4 w-4" />
@@ -482,7 +479,7 @@ export default function ChatwootWidgetPage() {
             <button
               type="button"
               onClick={() => setIsTransferOpen(true)}
-              disabled={conversationId === 0 || !contextReady}
+              disabled={conversationId === 0 || !contextReady || conversationClosed}
               className="flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-xs hover:bg-slate-50 hover:border-slate-400 disabled:opacity-50 transition-colors"
             >
               <ArrowRightLeft className="h-3.5 w-3.5 text-slate-500" />
@@ -495,7 +492,7 @@ export default function ChatwootWidgetPage() {
                 setPrefilledItems([]);
                 setIsClosureOpen(true);
               }}
-              disabled={conversationId === 0 || !contextReady}
+              disabled={conversationId === 0 || !contextReady || conversationClosed || (currentUser?.role !== "manager" && claimState.claimedUserId !== currentUser?.user_id)}
               className="flex items-center gap-1.5 rounded-xl bg-red-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-red-700 disabled:opacity-50 transition-colors"
             >
               <ShoppingBag className="h-3.5 w-3.5" />
@@ -578,7 +575,7 @@ export default function ChatwootWidgetPage() {
                       Atendente Atual
                     </span>
                     <p className="font-medium text-slate-700 mt-0.5">
-                      {claimState.claimedBy || "Não atribuído"}
+                      {!contextReady ? "Não confirmado" : claimState.claimedBy || "Não atribuído"}
                     </p>
                   </div>
                 </div>
@@ -742,6 +739,7 @@ export default function ChatwootWidgetPage() {
               ? "Dúvida resolvida e atendimento finalizado."
               : "Atendimento cancelado.";
           setClosureCompleted(outcomeText);
+          setConversationClosed(true);
         }}
       />
     </div>
